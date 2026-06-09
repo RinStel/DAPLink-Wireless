@@ -17,6 +17,8 @@
 - 拦截越界 USB 标准请求、非法 recipient/端点，并修复 CDC 单包接收延迟及控制请求校验。
 - 将 GCC 工具链适配移至 `firmware/toolchain`，并强制 GCC/Keil 构建产物与 IDE 临时文件不得污染源码树。
 - 统一正式项目名称为 `DAPLink-Wireless`，保留 `daplink_wireless` 作为构建产物 basename。
+- 增加 GitHub Actions 软件门禁，修复 Windows/Linux 构建脚本可移植性，并将完整 GPLv3 许可证纳入发布包校验。
+- 将 9 个重复的主机测试脚本合并为数据化 `test_host.ps1`，并使用 SPDX 精简脚本许可证头。
 
 ## 0.8.0-rc.1 - 2026-06-09
 

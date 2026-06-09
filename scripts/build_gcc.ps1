@@ -1,20 +1,5 @@
-﻿<#
- * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
- * Copyright (C) 2025 RinStel <me@rinx.nz>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025 RinStel <me@rinx.nz>
 param(
     [string]$ToolchainBin = "",
     [string]$Configuration = "Debug"
@@ -201,7 +186,7 @@ $linkerScript = Join-Path $repoRoot "firmware/linker/gd32f303xC_app.ld"
 $map = Join-Path $buildDir "daplink_wireless.map"
 
 & $gcc @cpuFlags @objects "-T$linkerScript" "-Wl,--gc-sections" `
-    "-Wl,-Map=$map" "--specs=nosys.specs" -o $elf
+    "-Wl,--fatal-warnings" "-Wl,-Map=$map" "--specs=nosys.specs" -o $elf
 if ($LASTEXITCODE -ne 0) {
     throw "Link failed"
 }

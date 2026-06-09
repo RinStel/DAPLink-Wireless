@@ -1,20 +1,5 @@
-﻿<#
- * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
- * Copyright (C) 2025 RinStel <me@rinx.nz>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025 RinStel <me@rinx.nz>
 param(
     [string]$ToolchainBin = "",
     [string]$KeilPath = "",
@@ -44,13 +29,15 @@ if (-not $SkipVerification) {
     }
 }
 
-$manifestPath = Join-Path $repoRoot "build\gcc\release\manifest.json"
+$manifestPath = Join-Path $repoRoot "build/gcc/release/manifest.json"
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
 $distRoot = Join-Path $repoRoot "dist"
 $packageName = "daplink-wireless-$($manifest.version)"
 $packageDir = Join-Path $distRoot $packageName
 $zipPath = Join-Path $distRoot "$packageName.zip"
-$distFullPath = [System.IO.Path]::GetFullPath($distRoot).TrimEnd('\') + '\'
+$directorySeparator = [System.IO.Path]::DirectorySeparatorChar
+$distFullPath = [System.IO.Path]::GetFullPath($distRoot).
+    TrimEnd('\', '/') + $directorySeparator
 $packageFullPath = [System.IO.Path]::GetFullPath($packageDir)
 if (-not $packageFullPath.StartsWith(
         $distFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -65,21 +52,22 @@ if (Test-Path $zipPath) {
 }
 New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
-$releaseBuild = Join-Path $repoRoot "build\gcc\release"
+$releaseBuild = Join-Path $repoRoot "build/gcc/release"
 Copy-Item (Join-Path $releaseBuild "daplink_wireless.elf") $packageDir
 Copy-Item (Join-Path $releaseBuild "daplink_wireless.hex") $packageDir
 Copy-Item (Join-Path $releaseBuild "daplink_wireless.bin") $packageDir
 Copy-Item $manifestPath $packageDir
 Copy-Item (Join-Path $repoRoot "README.md") $packageDir
+Copy-Item (Join-Path $repoRoot "LICENSE") $packageDir
 Copy-Item (Join-Path $repoRoot "CHANGELOG.md") $packageDir
 Copy-Item (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") $packageDir
 Copy-Item (Join-Path $repoRoot "dependencies.lock.json") $packageDir
 
 $licensesDir = Join-Path $packageDir "licenses"
 New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
-Copy-Item (Join-Path $repoRoot "licenses\GigaDevice-BSD-3-Clause.txt") `
+Copy-Item (Join-Path $repoRoot "licenses/GigaDevice-BSD-3-Clause.txt") `
     $licensesDir
-Copy-Item (Join-Path $repoRoot "Third-Party\CMSIS-DAP\LICENSE") `
+Copy-Item (Join-Path $repoRoot "Third-Party/CMSIS-DAP/LICENSE") `
     (Join-Path $licensesDir "CMSIS-DAP-Apache-2.0.txt")
 
 $docsDir = Join-Path $packageDir "docs"
@@ -93,10 +81,10 @@ $releaseDocs = @(
     "frequency_hopping.md"
 )
 foreach ($doc in $releaseDocs) {
-    Copy-Item (Join-Path $repoRoot "docs\$doc") $docsDir
+    Copy-Item (Join-Path $repoRoot "docs/$doc") $docsDir
 }
 
-Compress-Archive -Path "$packageDir\*" -DestinationPath $zipPath
+Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $requiredEntries = @(
@@ -106,6 +94,7 @@ $requiredEntries = @(
     "daplink_wireless.hex",
     "manifest.json",
     "README.md",
+    "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "dependencies.lock.json",
     "licenses/CMSIS-DAP-Apache-2.0.txt",
@@ -123,10 +112,11 @@ try {
         }
     }
     $licenseSources = @{
+        "LICENSE" = (Join-Path $repoRoot "LICENSE")
         "licenses/CMSIS-DAP-Apache-2.0.txt" =
-            (Join-Path $repoRoot "Third-Party\CMSIS-DAP\LICENSE")
+            (Join-Path $repoRoot "Third-Party/CMSIS-DAP/LICENSE")
         "licenses/GigaDevice-BSD-3-Clause.txt" =
-            (Join-Path $repoRoot "licenses\GigaDevice-BSD-3-Clause.txt")
+            (Join-Path $repoRoot "licenses/GigaDevice-BSD-3-Clause.txt")
     }
     foreach ($entryName in $licenseSources.Keys) {
         $entry = $archive.Entries | Where-Object {

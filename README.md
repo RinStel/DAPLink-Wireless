@@ -4,10 +4,6 @@
 `v0.5`，主控为 GD32F303CCT6，无线模块为基于 SX1281 的
 E28-2G4M20SX。
 
-## 关于开源协议
-
-注意：**本项目使用 GPL 3.0 协议，未经授权禁止商用。**
-
 ## 功能
 
 - 有线模式：USB CMSIS-DAP v2、CDC 串口与目标板直接连接。
@@ -39,8 +35,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 该命令依次运行 Git 索引与源码树洁净性检查、主机侧协议测试、
 GCC Debug/Release 严格构建、产物哈希和栈占用检查。安装 Keil 后还会构建
 `firmware/project.uvprojx`，所有 GCC/Keil 输出均写入 `build/`。
-GitHub Actions 在 `windows-2022` 上使用 Arm GNU 13.3.Rel1 执行同一软件
+GitHub Actions 在 `ubuntu-24.04` 上使用 Arm GNU 13.3.Rel1 执行同一软件
 门禁并上传固件产物；Keil 零警告构建仍由本地发布流程负责。
+
+单独运行全部或指定主机测试：
+
+```powershell
+.\scripts\test_host.ps1
+.\scripts\test_host.ps1 -Name cmsis-dap
+```
 
 生成发布候选包：
 
@@ -57,4 +60,3 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1
 两秒切换设备模式；SWD 事务进行中禁止修改配置。
 
 具体协议、配置格式和实机验证步骤参见[项目文档](docs/README.md)。
-

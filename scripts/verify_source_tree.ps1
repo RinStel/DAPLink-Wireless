@@ -1,20 +1,5 @@
-﻿<#
- * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
- * Copyright (C) 2025 RinStel <me@rinx.nz>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025 RinStel <me@rinx.nz>
 param(
     [switch]$CleanGenerated
 )
@@ -23,10 +8,11 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $firmwareRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $repoRoot "firmware"))
+$directorySeparator = [System.IO.Path]::DirectorySeparatorChar
 
 function Remove-FirmwareGeneratedFile([System.IO.FileInfo]$file) {
     $fullPath = [System.IO.Path]::GetFullPath($file.FullName)
-    $prefix = $firmwareRoot.TrimEnd('\') + '\'
+    $prefix = $firmwareRoot.TrimEnd('\', '/') + $directorySeparator
     if (-not $fullPath.StartsWith(
             $prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to remove a file outside firmware: $fullPath"
@@ -65,7 +51,8 @@ $pollutedDirectories = Get-ChildItem -LiteralPath $firmwareRoot `
 if ($forbiddenFiles.Count -gt 0 -or $pollutedDirectories.Count -gt 0) {
     $paths = @($forbiddenFiles.FullName) + @($pollutedDirectories.FullName)
     $relativePaths = $paths | Sort-Object -Unique | ForEach-Object {
-        $_.Substring($repoRoot.Length).TrimStart('\')
+        $_.Substring($repoRoot.Length).TrimStart('\', '/').
+            Replace('\', '/')
     }
     throw "Generated files polluted the firmware source tree:`n$(
         $relativePaths -join "`n")"

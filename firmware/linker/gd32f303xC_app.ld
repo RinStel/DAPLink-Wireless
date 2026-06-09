@@ -1,5 +1,5 @@
-﻿/*
- * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
+/*
+ * DAPLink-Wireless - Wireless CMSIS-DAP v2 debug probe firmware
  * Copyright (C) 2025 RinStel <me@rinx.nz>
  *
  * This program is free software: you can redistribute it and/or modify

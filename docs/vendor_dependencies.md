@@ -27,7 +27,6 @@ GD32F30x V3.0.3 没有使用 submodule，作为 GigaDevice 官方发布包快照
 ## 正式发布前仍需提供或确认
 
 - 可合法用于产品发布的 USB VID/PID。
-- 项目顶层许可证选择。
 - 一套真实 Cortex-M 目标板，用于 Arm Validation、Keil、pyOCD 和 OpenOCD。
 - 两块完整无线调试器硬件，用于跳频、吞吐、掉电和长稳验证。
 - 若需要量产，需提供生产测试接口、射频法规目标地区和校准要求。

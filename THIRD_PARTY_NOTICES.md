@@ -1,7 +1,8 @@
 ﻿# Third-Party Notices
 
-These notices apply only to the identified third-party components. They do
-not grant a license to the original DAPLink-Wireless project code.
+These notices apply only to the identified third-party components.
+DAPLink-Wireless project code is licensed separately under GNU GPL v3.0 or
+later; see `LICENSE`.
 
 ## GigaDevice GD32F30x firmware library
 

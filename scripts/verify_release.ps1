@@ -1,20 +1,5 @@
-﻿<#
- * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
- * Copyright (C) 2025 RinStel <me@rinx.nz>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025 RinStel <me@rinx.nz>
 param(
     [string]$ToolchainBin = "",
     [string]$KeilPath = "",
@@ -33,24 +18,11 @@ function Invoke-CheckedScript([string]$path, [string[]]$arguments = @()) {
     }
 }
 
-$tests = @(
-    "test_cmsis_dap_protocol.ps1",
-    "test_radio_protocol.ps1",
-    "test_device_config.ps1",
-    "test_device_config_storage.ps1",
-    "test_swd_tunnel_protocol.ps1",
-    "test_link_adaptation.ps1",
-    "test_sx128x_driver.ps1",
-    "test_usb_composite_descriptor.ps1",
-    "test_usb_disk_geometry.ps1"
-)
 Invoke-CheckedScript (Join-Path $PSScriptRoot "verify_source_tree.ps1") `
     @("-CleanGenerated")
 Invoke-CheckedScript (Join-Path $PSScriptRoot "verify_repository.ps1")
 Invoke-CheckedScript (Join-Path $PSScriptRoot "verify_dependencies.ps1")
-foreach ($test in $tests) {
-    Invoke-CheckedScript (Join-Path $PSScriptRoot $test)
-}
+Invoke-CheckedScript (Join-Path $PSScriptRoot "test_host.ps1")
 
 $buildScript = Join-Path $PSScriptRoot "build_gcc.ps1"
 $buildArgs = @("-Configuration", "Debug")
@@ -61,7 +33,7 @@ Invoke-CheckedScript $buildScript $buildArgs
 $buildArgs[1] = "Release"
 Invoke-CheckedScript $buildScript $buildArgs
 
-$releaseBuild = Join-Path $repoRoot "build\gcc\release"
+$releaseBuild = Join-Path $repoRoot "build/gcc/release"
 $reproducibleFiles = @(
     "daplink_wireless.elf",
     "daplink_wireless.hex",
@@ -83,10 +55,10 @@ foreach ($file in $reproducibleFiles) {
     }
 }
 
-$manifestPath = Join-Path $repoRoot "build\gcc\release\manifest.json"
+$manifestPath = Join-Path $repoRoot "build/gcc/release/manifest.json"
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
 $versionHeader = Get-Content `
-    (Join-Path $repoRoot "firmware\app\firmware_version.h") -Raw
+    (Join-Path $repoRoot "firmware/app/firmware_version.h") -Raw
 $versionMatch = [regex]::Match(
     $versionHeader, '#define\s+FIRMWARE_VERSION_STRING\s+"([^"]+)"')
 if (-not $versionMatch.Success -or
@@ -106,16 +78,16 @@ foreach ($artifact in $manifest.artifacts) {
     }
 }
 
-$projectText = Get-Content (Join-Path $repoRoot "firmware\project.uvprojx") -Raw
+$projectText = Get-Content (Join-Path $repoRoot "firmware/project.uvprojx") -Raw
 $buildText = Get-Content $buildScript -Raw
 if (($projectText -match '(?i)[\\/]third-party[\\/]') -or
     ($buildText -match '(?i)[\\/]third-party[\\/]')) {
     throw "Firmware builds must not compile sources from Third-Party"
 }
 $requiredDependencies = @(
-    "vendor\GD32_CMSIS",
-    "vendor\GD32F30x_standard_peripheral",
-    "vendor\GD32F30x_usbd_library"
+    "vendor/GD32_CMSIS",
+    "vendor/GD32F30x_standard_peripheral",
+    "vendor/GD32F30x_usbd_library"
 )
 foreach ($dependency in $requiredDependencies) {
     if (-not (Test-Path (Join-Path $repoRoot $dependency))) {
@@ -155,13 +127,13 @@ if (-not $SkipKeil) {
         throw "Keil UV4.exe not found; pass -KeilPath, set KEIL_UV4_PATH, " +
             "add it to PATH, or use -SkipKeil"
     }
-    $project = Join-Path $repoRoot "firmware\project.uvprojx"
+    $project = Join-Path $repoRoot "firmware/project.uvprojx"
     $projectDir = Split-Path $project
     New-Item -ItemType Directory -Force `
-        -Path (Join-Path $repoRoot "build\keil\objects") | Out-Null
+        -Path (Join-Path $repoRoot "build/keil/objects") | Out-Null
     New-Item -ItemType Directory -Force `
-        -Path (Join-Path $repoRoot "build\keil\listings") | Out-Null
-    $log = Join-Path $repoRoot "build\keil-release.log"
+        -Path (Join-Path $repoRoot "build/keil/listings") | Out-Null
+    $log = Join-Path $repoRoot "build/keil-release.log"
     if (Test-Path $log) {
         Remove-Item -LiteralPath $log -Force
     }

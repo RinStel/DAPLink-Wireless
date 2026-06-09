@@ -23,7 +23,7 @@ MISMATCH 状态。
 ## 主机侧回归
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\test_cmsis_dap_protocol.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\test_host.ps1 -Name cmsis-dap
 ```
 
 该测试覆盖产品版本和能力查询、填充后的 64 字节 Bulk 请求、无效命令、连接、
