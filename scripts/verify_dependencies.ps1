@@ -4,19 +4,25 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $lockPath = Join-Path $repoRoot "dependencies.lock.json"
 
-function Get-DirectoryTreeFingerprint([string]$directory) {
-    $root = (Resolve-Path -LiteralPath $directory).Path
+function Get-DirectoryTreeFingerprint([string]$relativeDirectory) {
     $entries = @(
-        Get-ChildItem -LiteralPath $root -Recurse -File |
-            Sort-Object FullName |
+        & git -C $repoRoot ls-files --stage -- $relativeDirectory |
             ForEach-Object {
-                $relative = $_.FullName.Substring($root.Length).
-                    TrimStart('\', '/').Replace('\', '/')
-                $hash = (Get-FileHash -Algorithm SHA256 `
-                    -LiteralPath $_.FullName).Hash.ToLowerInvariant()
-                "$relative|$hash"
+                if ($_ -notmatch '^(\d+) ([0-9a-f]+) \d+\t(.+)$') {
+                    throw "Cannot parse Git index entry: $_"
+                }
+                $path = $Matches[3].Replace('\', '/')
+                $relative = $path.Substring(
+                    $relativeDirectory.Length).TrimStart('/')
+                "$relative|$($Matches[1])|$($Matches[2])"
             }
     )
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot read Git index for: $relativeDirectory"
+    }
+    [Array]::Sort(
+        $entries,
+        [System.StringComparer]::Ordinal)
     $bytes = [System.Text.Encoding]::UTF8.GetBytes(
         $entries -join "`n")
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -65,7 +71,17 @@ foreach ($snapshot in $lock.vendor_snapshots) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Vendor snapshot is missing: $($snapshot.path)"
     }
-    $fingerprint = Get-DirectoryTreeFingerprint $path
+    & git -C $repoRoot diff --quiet HEAD -- $snapshot.path
+    if ($LASTEXITCODE -ne 0) {
+        throw "Vendor snapshot has modified tracked files: " +
+            "$($snapshot.path)"
+    }
+    $untracked = & git -C $repoRoot ls-files --others `
+        --exclude-standard -- $snapshot.path
+    if ($LASTEXITCODE -ne 0 -or $untracked) {
+        throw "Vendor snapshot has untracked files: $($snapshot.path)"
+    }
+    $fingerprint = Get-DirectoryTreeFingerprint $snapshot.path
     if (($fingerprint.sha256 -ne $snapshot.sha256) -or
         ([int]$fingerprint.file_count -ne [int]$snapshot.file_count)) {
         throw "Vendor snapshot differs from dependency lock: " +

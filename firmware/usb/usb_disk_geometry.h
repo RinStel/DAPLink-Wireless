@@ -19,6 +19,7 @@
 #define USB_DISK_GEOMETRY_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 static inline bool usb_disk_byte_range_valid(uint32_t disk_size,

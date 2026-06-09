@@ -22,7 +22,8 @@
 
 GD32F30x V3.0.3 没有使用 submodule，作为 GigaDevice 官方发布包快照保存在
 `vendor/`。项目代码不得修改这些文件；`dependencies.lock.json` 记录三个参与
-构建的 GD32 目录树哈希，发布验证会拒绝任何未更新锁文件的变化。
+构建目录的 Git 索引对象树指纹，因此不受 Windows/Linux checkout 换行格式
+影响。发布验证会单独拒绝已修改、未跟踪、增删或替换的厂商文件。
 
 ## 正式发布前仍需提供或确认
 

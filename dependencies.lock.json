@@ -11,19 +11,19 @@
       "path": "vendor/GD32_CMSIS",
       "version": "GD32F30x V3.0.3",
       "file_count": 30,
-      "sha256": "a95ea9dd60cf155eaafd568c922375d060037de8285dbd6a1a39fce318c89a70"
+      "sha256": "14fded198ac22696faa60e0ce13d4ab458dda7be84a81fe407a46296d4206646"
     },
     {
       "path": "vendor/GD32F30x_standard_peripheral",
       "version": "GD32F30x V3.0.3",
       "file_count": 48,
-      "sha256": "19f32f5a831012508c9581248cd6a11301af81c76ff522ae816082459110d3a2"
+      "sha256": "4e979edf429c24c3ed7db1698c9c2d1ef0aa46c11203185343122ce66de2174e"
     },
     {
       "path": "vendor/GD32F30x_usbd_library",
       "version": "GD32F30x V3.0.3",
       "file_count": 42,
-      "sha256": "ed1cfa3620161bca94c01f60cf6f939c4e2e7976c0bb033b3493e4283e3c3a66"
+      "sha256": "802a7bb3785161fb46be455e902817737f6066bc8a2a8e3ae1e42750f50781d3"
     }
   ]
 }
