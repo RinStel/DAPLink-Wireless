@@ -4,6 +4,10 @@
 `v0.5`，主控为 GD32F303CCT6，无线模块为基于 SX1281 的
 E28-2G4M20SX。
 
+## 关于开源协议
+
+注意：**本项目使用 GPL 3.0 协议，未经授权禁止商用。**
+
 ## 功能
 
 - 有线模式：USB CMSIS-DAP v2、CDC 串口与目标板直接连接。
@@ -54,15 +58,3 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1
 
 具体协议、配置格式和实机验证步骤参见[项目文档](docs/README.md)。
 
-## 发布状态
-
-当前版本为 `0.8.0-rc.2` 工程发布候选。默认 GD32 示例 VID/PID 尚未替换，
-项目许可证尚未确定，CMSIS-DAP 官方 Validation 和无线长稳测试也需要真实
-硬件完成。因此当前产物不能作为公开量产版本分发，完整门禁见
-`docs/release_checklist.md`。
-
-## 许可证
-
-项目自身代码目前尚未授予开源许可证，保留全部权利。未经版权所有者明确
-许可，不得复制、修改或分发。`vendor/` 和 `Third-Party/` 中的依赖分别遵循
-其自身许可证，详见 `THIRD_PARTY_NOTICES.md`。

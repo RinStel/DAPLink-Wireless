@@ -7,7 +7,7 @@
 
   <Targets>
     <Target>
-      <TargetName>Target_1</TargetName>
+      <TargetName>DAPLink-Wireless</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
       <pArmCC>6240000::V6.24::ARMCLANG</pArmCC>

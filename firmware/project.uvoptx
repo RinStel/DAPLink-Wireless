@@ -22,7 +22,7 @@
   </DaveTm>
 
   <Target>
-    <TargetName>Target_1</TargetName>
+    <TargetName>DAPLink-Wireless</TargetName>
     <ToolsetNumber>0x4</ToolsetNumber>
     <ToolsetName>ARM-ADS</ToolsetName>
     <TargetOption>
