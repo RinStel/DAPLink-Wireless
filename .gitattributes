@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.bin binary
+*.elf binary
+*.pdf binary
+*.zip binary
+
+# Vendor snapshots are hash-locked and must retain their original bytes.
+vendor/** -text whitespace=-trailing-space

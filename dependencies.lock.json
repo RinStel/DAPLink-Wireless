@@ -1,0 +1,29 @@
+{
+  "submodules": [
+    {
+      "path": "Third-Party/CMSIS-DAP",
+      "url": "https://github.com/ARM-software/CMSIS-DAP.git",
+      "commit": "6256803b7ac93731ec22e24e0ae8d91df3a7c953"
+    }
+  ],
+  "vendor_snapshots": [
+    {
+      "path": "vendor/GD32_CMSIS",
+      "version": "GD32F30x V3.0.3",
+      "file_count": 30,
+      "sha256": "a95ea9dd60cf155eaafd568c922375d060037de8285dbd6a1a39fce318c89a70"
+    },
+    {
+      "path": "vendor/GD32F30x_standard_peripheral",
+      "version": "GD32F30x V3.0.3",
+      "file_count": 48,
+      "sha256": "19f32f5a831012508c9581248cd6a11301af81c76ff522ae816082459110d3a2"
+    },
+    {
+      "path": "vendor/GD32F30x_usbd_library",
+      "version": "GD32F30x V3.0.3",
+      "file_count": 42,
+      "sha256": "ed1cfa3620161bca94c01f60cf6f939c4e2e7976c0bb033b3493e4283e3c3a66"
+    }
+  ]
+}
