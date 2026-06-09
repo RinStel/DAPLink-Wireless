@@ -35,6 +35,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 该命令依次运行 Git 索引与源码树洁净性检查、主机侧协议测试、
 GCC Debug/Release 严格构建、产物哈希和栈占用检查。安装 Keil 后还会构建
 `firmware/project.uvprojx`，所有 GCC/Keil 输出均写入 `build/`。
+GitHub Actions 在 `windows-2022` 上使用 Arm GNU 13.3.Rel1 执行同一软件
+门禁并上传固件产物；Keil 零警告构建仍由本地发布流程负责。
 
 生成发布候选包：
 

@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$powerShellExecutable = (Get-Process -Id $PID).Path
 
 if (-not $SkipVerification) {
     $verifyArgs = @()
@@ -19,7 +20,7 @@ if (-not $SkipVerification) {
     if ($SkipKeil) {
         $verifyArgs += "-SkipKeil"
     }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+    & $powerShellExecutable -NoProfile -File `
         (Join-Path $PSScriptRoot "verify_release.ps1") @verifyArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Release verification failed"

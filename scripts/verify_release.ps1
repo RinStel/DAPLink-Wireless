@@ -7,9 +7,10 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "release_common.ps1")
+$powerShellExecutable = (Get-Process -Id $PID).Path
 
 function Invoke-CheckedScript([string]$path, [string[]]$arguments = @()) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $path @arguments
+    & $script:powerShellExecutable -NoProfile -File $path @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Script failed: $path"
     }

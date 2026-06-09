@@ -14,6 +14,7 @@
 - [x] CMSIS-DAP 由固定提交的 Git submodule 管理。
 - [x] GD32 V3.0.3 作为厂商快照保存在 `vendor/`，目录树哈希已锁定。
 - [x] Git 索引拒绝 PDF、构建产物、错误子模块形态和锁外厂商文件。
+- [x] GitHub Actions 使用固定工具链执行无 Keil软件门禁并保存构建产物。
 - [x] 项目适配代码不修改或复制依赖实现。
 - [x] 发布包包含 GigaDevice 和 Arm CMSIS-DAP 的第三方许可与归属声明。
 

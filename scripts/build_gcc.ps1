@@ -8,32 +8,50 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "release_common.ps1")
 $configurationName = $Configuration.ToLowerInvariant()
-$buildDir = Join-Path $repoRoot "build\gcc\$configurationName"
+$buildDir = Join-Path $repoRoot "build/gcc/$configurationName"
+
+function Find-Tool([string]$name, [string]$directory = "") {
+    $fileNames = if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        @("$name.exe", $name)
+    } else {
+        @($name)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        foreach ($fileName in $fileNames) {
+            $candidate = Join-Path $directory $fileName
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                return $candidate
+            }
+        }
+        throw "Tool not found in ${directory}: $name"
+    }
+    foreach ($fileName in $fileNames) {
+        $command = Get-Command $fileName -ErrorAction SilentlyContinue
+        if ($null -ne $command) {
+            return $command.Source
+        }
+    }
+    throw "Tool not found on PATH: $name"
+}
 
 if ([string]::IsNullOrWhiteSpace($ToolchainBin)) {
     $ToolchainBin = $env:ARM_GCC_BIN
 }
 if ([string]::IsNullOrWhiteSpace($ToolchainBin)) {
-    $gccCommand = Get-Command "arm-none-eabi-gcc.exe" `
-        -ErrorAction SilentlyContinue
-    if ($null -ne $gccCommand) {
-        $ToolchainBin = Split-Path -Parent $gccCommand.Source
+    try {
+        $gccPath = Find-Tool "arm-none-eabi-gcc"
+        $ToolchainBin = Split-Path -Parent $gccPath
+    } catch {
+        throw "GNU Arm toolchain not found; pass -ToolchainBin, set " +
+            "ARM_GCC_BIN, or add it to PATH"
     }
 }
-if ([string]::IsNullOrWhiteSpace($ToolchainBin)) {
-    throw "GNU Arm toolchain not found; pass -ToolchainBin, set " +
-        "ARM_GCC_BIN, or add it to PATH"
-}
 
-$gcc = Join-Path $ToolchainBin "arm-none-eabi-gcc.exe"
-$objcopy = Join-Path $ToolchainBin "arm-none-eabi-objcopy.exe"
-$size = Join-Path $ToolchainBin "arm-none-eabi-size.exe"
+$gcc = Find-Tool "arm-none-eabi-gcc" $ToolchainBin
+$objcopy = Find-Tool "arm-none-eabi-objcopy" $ToolchainBin
+$size = Find-Tool "arm-none-eabi-size" $ToolchainBin
 $firmwareVersionHeader =
-    Join-Path $repoRoot "firmware\app\firmware_version.h"
-
-if (-not (Test-Path $gcc)) {
-    throw "arm-none-eabi-gcc not found: $gcc"
-}
+    Join-Path $repoRoot "firmware/app/firmware_version.h"
 
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
@@ -62,74 +80,79 @@ if ($Configuration -eq "Release") {
 }
 
 $includeFlags = @(
-    "-I$repoRoot\firmware\app",
-    "-I$repoRoot\firmware\bsp",
-    "-I$repoRoot\firmware\drivers\radio",
-    "-I$repoRoot\firmware\drivers\serial",
-    "-I$repoRoot\firmware\drivers\swd",
-    "-I$repoRoot\firmware\usb",
-    "-I$repoRoot\vendor\GD32_CMSIS",
-    "-I$repoRoot\vendor\GD32_CMSIS\GD\GD32F30x\Include",
-    "-I$repoRoot\vendor\GD32F30x_standard_peripheral\Include",
-    "-I$repoRoot\vendor\GD32F30x_usbd_library\device\Include",
-    "-I$repoRoot\vendor\GD32F30x_usbd_library\usbd\Include",
-    "-I$repoRoot\vendor\GD32F30x_usbd_library\class\device\msc\Include",
-    "-I$repoRoot\vendor\GD32F30x_usbd_library\class\device\cdc\Include"
+    "firmware/app",
+    "firmware/bsp",
+    "firmware/drivers/radio",
+    "firmware/drivers/serial",
+    "firmware/drivers/swd",
+    "firmware/usb",
+    "vendor/GD32_CMSIS",
+    "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+    "vendor/GD32F30x_standard_peripheral/Include",
+    "vendor/GD32F30x_usbd_library/device/Include",
+    "vendor/GD32F30x_usbd_library/usbd/Include",
+    "vendor/GD32F30x_usbd_library/class/device/msc/Include",
+    "vendor/GD32F30x_usbd_library/class/device/cdc/Include"
+) | ForEach-Object {
+    "-I$(Join-Path $repoRoot $_)"
+}
+
+$sourcePaths = @(
+    "firmware/app/main.c",
+    "firmware/app/cmsis_dap.c",
+    "firmware/app/frequency_hopping.c",
+    "firmware/app/link_adaptation.c",
+    "firmware/app/radio_protocol.c",
+    "firmware/app/serial_service.c",
+    "firmware/app/serial_bridge.c",
+    "firmware/app/swd_bridge_service.c",
+    "firmware/app/swd_tunnel.c",
+    "firmware/app/device_config.c",
+    "firmware/app/device_config_storage.c",
+    "firmware/usb/usb_config_disk.c",
+    "firmware/usb/usb_composite.c",
+    "firmware/usb/usb_standard_request.c",
+    "firmware/usb/usb_vendor_request.c",
+    "firmware/usb/cdc_acm_transport.c",
+    "firmware/usb/cmsis_dap_usb.c",
+    "firmware/bsp/board.c",
+    "firmware/drivers/radio/radio_hal.c",
+    "firmware/drivers/radio/sx128x.c",
+    "firmware/drivers/serial/target_uart.c",
+    "firmware/drivers/swd/target_swd.c",
+    "firmware/toolchain/gcc/syscalls.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_gpio.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_rcu.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_spi.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_fmc.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_fwdgt.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_misc.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_usart.c",
+    "vendor/GD32F30x_usbd_library/device/Source/usbd_core.c",
+    "vendor/GD32F30x_usbd_library/device/Source/usbd_enum.c",
+    "vendor/GD32F30x_usbd_library/device/Source/usbd_pwr.c",
+    "vendor/GD32F30x_usbd_library/device/Source/usbd_transc.c",
+    "vendor/GD32F30x_usbd_library/usbd/Source/usbd_lld_core.c",
+    "vendor/GD32F30x_usbd_library/usbd/Source/usbd_lld_int.c",
+    "vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_core.c",
+    "vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_bbb.c",
+    "vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_scsi.c",
+    "vendor/GD32_CMSIS/GD/GD32F30x/Source/system_gd32f30x.c",
+    "vendor/GD32_CMSIS/GD/GD32F30x/Source/GCC/startup_gd32f30x_hd.S"
 )
 
-$sources = @(
-    "$repoRoot\firmware\app\main.c",
-    "$repoRoot\firmware\app\cmsis_dap.c",
-    "$repoRoot\firmware\app\frequency_hopping.c",
-    "$repoRoot\firmware\app\link_adaptation.c",
-    "$repoRoot\firmware\app\radio_protocol.c",
-    "$repoRoot\firmware\app\serial_service.c",
-    "$repoRoot\firmware\app\serial_bridge.c",
-    "$repoRoot\firmware\app\swd_bridge_service.c",
-    "$repoRoot\firmware\app\swd_tunnel.c",
-    "$repoRoot\firmware\app\device_config.c",
-    "$repoRoot\firmware\app\device_config_storage.c",
-    "$repoRoot\firmware\usb\usb_config_disk.c",
-    "$repoRoot\firmware\usb\usb_composite.c",
-    "$repoRoot\firmware\usb\usb_standard_request.c",
-    "$repoRoot\firmware\usb\usb_vendor_request.c",
-    "$repoRoot\firmware\usb\cdc_acm_transport.c",
-    "$repoRoot\firmware\usb\cmsis_dap_usb.c",
-    "$repoRoot\firmware\bsp\board.c",
-    "$repoRoot\firmware\drivers\radio\radio_hal.c",
-    "$repoRoot\firmware\drivers\radio\sx128x.c",
-    "$repoRoot\firmware\drivers\serial\target_uart.c",
-    "$repoRoot\firmware\drivers\swd\target_swd.c",
-    "$repoRoot\firmware\toolchain\gcc\syscalls.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_gpio.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_rcu.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_spi.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_fmc.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_fwdgt.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_misc.c",
-    "$repoRoot\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_usart.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\device\Source\usbd_core.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\device\Source\usbd_enum.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\device\Source\usbd_pwr.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\device\Source\usbd_transc.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\usbd\Source\usbd_lld_core.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\usbd\Source\usbd_lld_int.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\class\device\msc\Source\usbd_msc_core.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\class\device\msc\Source\usbd_msc_bbb.c",
-    "$repoRoot\vendor\GD32F30x_usbd_library\class\device\msc\Source\usbd_msc_scsi.c",
-    "$repoRoot\vendor\GD32_CMSIS\GD\GD32F30x\Source\system_gd32f30x.c",
-    "$repoRoot\vendor\GD32_CMSIS\GD\GD32F30x\Source\GCC\startup_gd32f30x_hd.S"
-)
+$sources = $sourcePaths | ForEach-Object { Join-Path $repoRoot $_ }
 
 $objects = @()
 foreach ($source in $sources) {
-    $relative = $source.Substring($repoRoot.Length).TrimStart('\')
+    $relative = $source.Substring($repoRoot.Length).TrimStart('\', '/').
+        Replace('\', '/')
     $objectName = ($relative -replace '[\\/:]', '_') + ".o"
     $object = Join-Path $buildDir $objectName
     $sourceFlags = @()
 
     if ($relative.StartsWith(
-            "vendor\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            "vendor/", [System.StringComparison]::OrdinalIgnoreCase)) {
         # Vendor sources are immutable and may use intentionally unused
         # callback parameters. Project-owned code remains fully -Werror.
         $sourceFlags += @(
@@ -138,7 +161,7 @@ foreach ($source in $sources) {
         )
     }
     if ($relative.EndsWith(
-            "vendor\GD32F30x_usbd_library\device\Source\usbd_enum.c",
+            "vendor/GD32F30x_usbd_library/device/Source/usbd_enum.c",
             [System.StringComparison]::OrdinalIgnoreCase)) {
         $sourceFlags += @(
             "-Dusbd_standard_request=gd32_usbd_standard_request_unchecked",
@@ -157,9 +180,11 @@ foreach ($source in $sources) {
 $elf = Join-Path $buildDir "daplink_wireless.elf"
 $hex = Join-Path $buildDir "daplink_wireless.hex"
 $bin = Join-Path $buildDir "daplink_wireless.bin"
-$linkerScript = Join-Path $repoRoot "firmware\linker\gd32f303xC_app.ld"
+$linkerScript = Join-Path $repoRoot "firmware/linker/gd32f303xC_app.ld"
+$map = Join-Path $buildDir "daplink_wireless.map"
 
-& $gcc @cpuFlags @objects "-T$linkerScript" "-Wl,--gc-sections" "-Wl,-Map=$buildDir\daplink_wireless.map" "--specs=nosys.specs" -o $elf
+& $gcc @cpuFlags @objects "-T$linkerScript" "-Wl,--gc-sections" `
+    "-Wl,-Map=$map" "--specs=nosys.specs" -o $elf
 if ($LASTEXITCODE -ne 0) {
     throw "Link failed"
 }

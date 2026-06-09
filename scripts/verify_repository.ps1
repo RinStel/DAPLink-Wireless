@@ -7,6 +7,16 @@ if ($LASTEXITCODE -ne 0) {
     throw "The project is not inside a Git worktree"
 }
 
+$headExists = (& git -C $repoRoot rev-parse --verify HEAD 2>$null)
+if ($LASTEXITCODE -eq 0) {
+    $whitespaceErrors = & git -C $repoRoot diff-tree --check --root `
+        --no-commit-id -r HEAD 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git HEAD whitespace check failed:`n$(
+            $whitespaceErrors -join "`n")"
+    }
+}
+
 $whitespaceErrors = & git -C $repoRoot diff --cached --check 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw "Git index whitespace check failed:`n$(
