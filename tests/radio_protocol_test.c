@@ -21,6 +21,7 @@ int main(void)
                                   0x12345678U, 0xAABBCCDDU,
                                   7U, payload, sizeof(payload));
     assert(length == RADIO_PROTOCOL_HEADER_SIZE + sizeof(payload));
+    assert(frame[2] == RADIO_PROTOCOL_VERSION);
     assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
     assert(view.type == RADIO_FRAME_DATA);
     assert(view.session == 0xAABBCCDDU);
@@ -53,6 +54,13 @@ int main(void)
     assert(radio_protocol_build(
                frame, RADIO_FRAME_DATA, 0U, 0U, 0U, NULL, 1U) == 0U);
     assert(!radio_protocol_parse(NULL, length, 0x12345678U, &view));
+
+    length = radio_protocol_build(
+        frame, RADIO_FRAME_SWD_ABORT, 0x12345678U, 1U, 9U,
+        payload, 1U);
+    assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
+    assert(view.type == RADIO_FRAME_SWD_ABORT);
+    assert(view.payload_length == 1U);
 
     frequency_hopping_init(&hopping, 0x12345678U);
     channel = frequency_hopping_rendezvous(&hopping);

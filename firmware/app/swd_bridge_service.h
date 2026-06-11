@@ -33,6 +33,7 @@ bool swd_bridge_service_wireless_request(const uint8_t *payload,
                                          uint8_t length);
 bool swd_bridge_service_wireless_response(const uint8_t *payload,
                                           uint8_t length);
+bool swd_bridge_service_wireless_abort(uint8_t transaction_id);
 bool swd_bridge_service_reply_take(uint8_t *payload, uint8_t *length);
 bool swd_bridge_service_response_take(swd_tunnel_response_t *response);
 void swd_bridge_service_repeat_request(void);

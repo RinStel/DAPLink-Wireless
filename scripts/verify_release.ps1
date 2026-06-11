@@ -65,6 +65,16 @@ if (-not $versionMatch.Success -or
     $manifest.version -ne $versionMatch.Groups[1].Value) {
     throw "Firmware header and release manifest versions do not match"
 }
+$radioProtocolHeader = Get-Content (
+    Join-Path $repoRoot "firmware/app/radio_protocol.h") -Raw
+$radioProtocolMatch = [regex]::Match(
+    $radioProtocolHeader,
+    '#define\s+RADIO_PROTOCOL_VERSION\s+(\d+)U')
+if (-not $radioProtocolMatch.Success -or
+    [int]$manifest.radio_protocol -ne
+        [int]$radioProtocolMatch.Groups[1].Value) {
+    throw "Radio protocol header and release manifest versions do not match"
+}
 $sourceFingerprint = Get-ReleaseSourceFingerprint $repoRoot
 if (($manifest.source_tree_sha256 -ne $sourceFingerprint.sha256) -or
     ($manifest.source_file_count -ne $sourceFingerprint.file_count)) {

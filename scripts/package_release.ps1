@@ -63,12 +63,8 @@ Copy-Item (Join-Path $repoRoot "CHANGELOG.md") $packageDir
 Copy-Item (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") $packageDir
 Copy-Item (Join-Path $repoRoot "dependencies.lock.json") $packageDir
 
-$licensesDir = Join-Path $packageDir "licenses"
-New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
-Copy-Item (Join-Path $repoRoot "licenses/GigaDevice-BSD-3-Clause.txt") `
-    $licensesDir
 Copy-Item (Join-Path $repoRoot "Third-Party/CMSIS-DAP/LICENSE") `
-    (Join-Path $licensesDir "CMSIS-DAP-Apache-2.0.txt")
+    (Join-Path $packageDir "CMSIS-DAP-LICENSE.txt")
 
 $docsDir = Join-Path $packageDir "docs"
 New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
@@ -77,7 +73,7 @@ $releaseDocs = @(
     "hardware_acceptance.md",
     "cmsis_dap_validation.md",
     "usb_config_disk.md",
-    "radio_protocol_v3.md",
+    "radio_protocol_v4.md",
     "frequency_hopping.md"
 )
 foreach ($doc in $releaseDocs) {
@@ -97,8 +93,7 @@ $requiredEntries = @(
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "dependencies.lock.json",
-    "licenses/CMSIS-DAP-Apache-2.0.txt",
-    "licenses/GigaDevice-BSD-3-Clause.txt"
+    "CMSIS-DAP-LICENSE.txt"
 )
 $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
@@ -113,10 +108,8 @@ try {
     }
     $licenseSources = @{
         "LICENSE" = (Join-Path $repoRoot "LICENSE")
-        "licenses/CMSIS-DAP-Apache-2.0.txt" =
+        "CMSIS-DAP-LICENSE.txt" =
             (Join-Path $repoRoot "Third-Party/CMSIS-DAP/LICENSE")
-        "licenses/GigaDevice-BSD-3-Clause.txt" =
-            (Join-Path $repoRoot "licenses/GigaDevice-BSD-3-Clause.txt")
     }
     foreach ($entryName in $licenseSources.Keys) {
         $entry = $archive.Entries | Where-Object {

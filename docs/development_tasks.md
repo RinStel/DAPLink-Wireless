@@ -38,6 +38,9 @@
 - [x] Add a pyOCD hardware smoke test and formal acceptance procedure.
 - [x] Align ResetTarget, Disconnect, and Match Mismatch with Arm semantics.
 - [x] Bound wireless SWD retry time and reject oversized SWD sequences.
+- [x] Deliver TransferAbort to the wireless slave during target WAIT retries.
+- [x] Bound each SWD request below the CMSIS-DAP and radio deadlines.
+- [x] Hold USB disconnected long enough for configuration-disk remount.
 - [x] Run GCC static analysis on pure protocol and configuration modules.
 - [x] Validate USB composite descriptors, WCID and PMA allocation on host.
 - [x] Simulate Flash erase/program/commit failures and CRC recovery.

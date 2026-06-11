@@ -6,7 +6,16 @@
 #include "target_swd.h"
 
 static bool s_sequence_transfer_called;
+static bool s_cancel_during_transfer;
+static bool s_abort_requested;
+static uint32_t s_now_ms;
+static uint32_t s_transfer_advance_ms;
 static uint32_t s_transfer_calls;
+
+uint32_t board_millis(void)
+{
+    return s_now_ms;
+}
 
 uint32_t board_cycle_count(void)
 {
@@ -40,6 +49,11 @@ target_swd_ack_t target_swd_transfer(uint8_t request, uint32_t *data)
 {
     (void)request;
     ++s_transfer_calls;
+    s_now_ms += s_transfer_advance_ms;
+    if (s_cancel_during_transfer) {
+        swd_tunnel_cancel();
+        return TARGET_SWD_ACK_WAIT;
+    }
     if (data != NULL) {
         *data = 0U;
     }
@@ -48,6 +62,11 @@ target_swd_ack_t target_swd_transfer(uint8_t request, uint32_t *data)
 
 void target_swd_abort_clear(void)
 {
+}
+
+void target_swd_abort_request(void)
+{
+    s_abort_requested = true;
 }
 
 bool target_swd_sequence(uint16_t bit_count, const uint8_t *data)
@@ -94,6 +113,10 @@ int main(void)
         .request = 0x32U,
         .data = 0x12345678U
     };
+    swd_tunnel_transfer_t cancel_transfer = {
+        .request = 0x02U,
+        .data = 0U
+    };
     swd_tunnel_response_t response;
     const uint8_t raw_response[] = {
         SWD_TUNNEL_OP_SWD_SEQUENCE, 7U, 2U, 0U, 0U, 0xA5U
@@ -112,6 +135,7 @@ int main(void)
     assert(payload[6] == 0x56U);
 
     assert(swd_tunnel_submit(payload, 9U));
+    swd_tunnel_process();
     assert(swd_tunnel_response_take(payload, &length));
     assert(length == 4U);
 
@@ -125,6 +149,7 @@ int main(void)
             5U, match_transfers, 2U, payload);
         s_transfer_calls = 0U;
         assert(swd_tunnel_submit(payload, length));
+        swd_tunnel_process();
         assert(swd_tunnel_response_take(payload, &length));
         assert(s_transfer_calls == 129U);
         assert(payload[3] == 0x11U);
@@ -159,5 +184,48 @@ int main(void)
     s_sequence_transfer_called = false;
     assert(!swd_tunnel_submit(payload, 5U));
     assert(!s_sequence_transfer_called);
+
+    length = swd_tunnel_encode_transfers(
+        11U, &cancel_transfer, 1U, payload);
+    s_transfer_calls = 0U;
+    assert(swd_tunnel_submit(payload, length));
+    swd_tunnel_cancel();
+    swd_tunnel_process();
+    assert(s_transfer_calls == 0U);
+    assert(!swd_tunnel_response_take(payload, &length));
+
+    length = swd_tunnel_encode_transfers(
+        12U, &cancel_transfer, 1U, payload);
+    s_cancel_during_transfer = true;
+    s_abort_requested = false;
+    assert(swd_tunnel_submit(payload, length));
+    swd_tunnel_process();
+    s_cancel_during_transfer = false;
+    assert(s_abort_requested);
+    assert(!swd_tunnel_response_take(payload, &length));
+
+    cancel_transfer.request = 0x22U;
+    length = swd_tunnel_encode_transfers(
+        13U, &cancel_transfer, 1U, payload);
+    assert(!swd_tunnel_submit(payload, length));
+
+    {
+        swd_tunnel_transfer_t budget_transfers[2] = {
+            {.request = 0x20U, .data = 0xFFFFFFFFU},
+            {.request = 0x12U, .data = 1U}
+        };
+
+        s_now_ms = 0U;
+        s_transfer_advance_ms = 300U;
+        s_transfer_calls = 0U;
+        length = swd_tunnel_encode_transfers(
+            14U, budget_transfers, 2U, payload);
+        assert(swd_tunnel_submit(payload, length));
+        swd_tunnel_process();
+        assert(swd_tunnel_response_take(payload, &length));
+        assert(s_transfer_calls < 20U);
+        assert(payload[3] == 0x11U);
+        s_transfer_advance_ms = 0U;
+    }
     return 0;
 }

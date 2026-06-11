@@ -8,7 +8,7 @@
 - 提交：`6256803b7ac93731ec22e24e0ae8d91df3a7c953`
 - 描述：`v2.1.2-1-g6256803`
 
-当前固件版本为 `0.8.0-rc.2`。已实现 SWD 调试所需的 Info、Connect、
+当前固件版本为 `0.8.0-rc.3`。已实现 SWD 调试所需的 Info、Connect、
 Disconnect、TransferConfigure、Transfer、TransferBlock、TransferAbort、
 WriteABORT、Delay、ResetTarget、SWJ Pins、SWJ Clock、SWJ Sequence、
 SWD Configure 和 SWD Sequence。Transfer 支持 Match Value 与 Match Mask。
@@ -17,8 +17,8 @@ SWD Configure 和 SWD Sequence。Transfer 支持 Match Value 与 Match Mask。
 Capabilities 仅声明 SWD 和独立 USB CDC COM Port；不声明基于 DAP 命令的
 UART Transport。
 为保证无线从机不会被恶意或异常的主机参数长期阻塞，单次 SWD WAIT 重试
-设有 1 秒时间预算，Match Retry 上限为 128；返回值仍使用标准 WAIT 或
-MISMATCH 状态。
+设有 250 ms 时间预算，整个隧道请求设有 2500 ms 总预算，Match Retry 上限
+为 128；返回值仍使用标准 WAIT 或 MISMATCH 状态。
 
 ## 主机侧回归
 

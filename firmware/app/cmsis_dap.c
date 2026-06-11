@@ -91,6 +91,7 @@ static bool s_response_ready;
 static bool s_connected;
 static bool s_transfer_block;
 static bool s_write_abort;
+static bool s_cancel_waiting;
 static uint8_t s_idle_cycles;
 static uint16_t s_retry_count;
 static uint16_t s_match_retry;
@@ -347,6 +348,12 @@ static bool transfer_parse(void)
         }
         request = s_request[input_offset++];
         if ((request & DAP_TRANSFER_UNSUPPORTED) != 0U) {
+            return false;
+        }
+        if ((((request & DAP_TRANSFER_MATCH_MASK) != 0U) &&
+             ((request & DAP_TRANSFER_RNW) != 0U)) ||
+            (((request & DAP_TRANSFER_MATCH_VALUE) != 0U) &&
+             ((request & DAP_TRANSFER_RNW) == 0U))) {
             return false;
         }
         s_transfers[index].request = request & 0x3FU;
@@ -765,6 +772,7 @@ void cmsis_dap_init(void)
     s_turnaround = 1U;
     s_data_phase = false;
     s_abort_requested = false;
+    s_cancel_waiting = false;
 }
 
 bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
@@ -796,18 +804,28 @@ void cmsis_dap_process(void)
     }
     if (s_abort_requested) {
         s_abort_requested = false;
-        if (s_state == DAP_STATE_TRANSFER) {
+        if ((s_state == DAP_STATE_TRANSFER) && !s_cancel_waiting) {
             serial_bridge_swd_cancel(s_transaction_id);
-            if (s_write_abort) {
-                s_response[1] = DAP_ERROR;
-            } else if (s_transfer_block) {
-                s_response[3] = DAP_TRANSFER_ERROR;
-            } else {
-                s_response[2] = DAP_TRANSFER_ERROR;
-            }
-            response_finish(s_response_length);
+            s_cancel_waiting = true;
+            s_deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
             return;
         }
+    }
+    if (s_cancel_waiting) {
+        if (!serial_bridge_swd_cancel_complete(s_transaction_id) &&
+            ((int32_t)(board_millis() - s_deadline) < 0)) {
+            return;
+        }
+        s_cancel_waiting = false;
+        if (s_write_abort) {
+            s_response[1] = DAP_ERROR;
+        } else if (s_transfer_block) {
+            s_response[3] = DAP_TRANSFER_ERROR;
+        } else {
+            s_response[2] = DAP_TRANSFER_ERROR;
+        }
+        response_finish(s_response_length);
+        return;
     }
     if (serial_bridge_swd_response_take(&result)) {
         if (result.transaction_id != s_transaction_id) {

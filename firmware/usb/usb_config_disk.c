@@ -43,6 +43,7 @@
 #define DISK_ROOT_SECTOR         2U
 #define DISK_DATA_SECTOR         3U
 #define DISK_CONFIG_DELAY_MS     800U
+#define USB_REENUMERATE_DELAY_MS  25U
 #define CONFIG_BUFFER_SIZE       512U
 #define STATUS_BUFFER_SIZE       256U
 
@@ -323,6 +324,13 @@ static void usb_irqs_enable(bool enable)
     }
 }
 
+static void usb_reconnect(void)
+{
+    board_delay_ms(USB_REENUMERATE_DELAY_MS);
+    usb_irqs_enable(true);
+    usbd_connect(&s_usb_device);
+}
+
 static void disk_rebuild_and_reconnect(void)
 {
     usbd_disconnect(&s_usb_device);
@@ -330,8 +338,7 @@ static void disk_rebuild_and_reconnect(void)
     disk_format();
     s_disk_dirty = false;
     s_refresh_requested = false;
-    usb_irqs_enable(true);
-    usbd_connect(&s_usb_device);
+    usb_reconnect();
 }
 
 static bool profile_parse(const char *value, sx128x_profile_t *profile)
@@ -641,8 +648,7 @@ void usb_config_disk_process(void)
                                   previous.device_mode,
                                   previous.rate_mode,
                                   previous.fixed_profile);
-        usb_irqs_enable(true);
-        usbd_connect(&s_usb_device);
+        usb_reconnect();
         return;
     }
 
@@ -652,8 +658,6 @@ void usb_config_disk_process(void)
                                   previous.rate_mode,
                                   previous.fixed_profile);
         (void)serial_bridge_apply_config();
-        usb_irqs_enable(true);
-        usbd_connect(&s_usb_device);
         s_disk_dirty = false;
         s_last_apply_ok = false;
         s_apply_result = CONFIG_APPLY_RADIO_FAILED;
@@ -667,8 +671,6 @@ void usb_config_disk_process(void)
                                   previous.rate_mode,
                                   previous.fixed_profile);
         (void)serial_bridge_apply_config();
-        usb_irqs_enable(true);
-        usbd_connect(&s_usb_device);
         s_disk_dirty = false;
         s_last_apply_ok = false;
         s_apply_result = CONFIG_APPLY_FLASH_FAILED;

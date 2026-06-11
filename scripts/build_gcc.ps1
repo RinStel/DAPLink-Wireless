@@ -254,6 +254,16 @@ if ($Configuration -eq "Release") {
         throw "Unable to read firmware version"
     }
     $version = $versionMatch.Groups[1].Value
+    $radioProtocolHeader = Get-Content (
+        Join-Path $repoRoot "firmware/app/radio_protocol.h") -Raw
+    $radioProtocolMatch = [regex]::Match(
+        $radioProtocolHeader,
+        '#define\s+RADIO_PROTOCOL_VERSION\s+(\d+)U')
+    if (-not $radioProtocolMatch.Success) {
+        throw "Unable to read radio protocol version"
+    }
+    $radioProtocolVersion =
+        [int]$radioProtocolMatch.Groups[1].Value
     $sourceFingerprint = Get-ReleaseSourceFingerprint $repoRoot
     $compilerVersion = (& $gcc --version | Select-Object -First 1)
     $artifacts = @($elf, $hex, $bin)
@@ -272,7 +282,7 @@ if ($Configuration -eq "Release") {
         hardware = "v0.5"
         configuration = "Release"
         cmsis_dap = "v2"
-        radio_protocol = 3
+        radio_protocol = $radioProtocolVersion
         compiler = $compilerVersion
         source_tree_sha256 = $sourceFingerprint.sha256
         source_file_count = $sourceFingerprint.file_count

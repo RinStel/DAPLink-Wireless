@@ -22,8 +22,6 @@
 
 #define RADIO_PROTOCOL_MAGIC_0 0x44U
 #define RADIO_PROTOCOL_MAGIC_1 0x53U
-#define RADIO_PROTOCOL_VERSION 0x03U
-
 static void encode_u32_be(uint8_t *output, uint32_t value)
 {
     output[0] = (uint8_t)(value >> 24);

@@ -18,6 +18,7 @@ static uint32_t s_now_ms;
 static uint8_t s_transaction;
 static bool s_response_available;
 static bool s_cancelled;
+static bool s_cancel_complete;
 static swd_tunnel_response_t s_bridge_response;
 static swd_tunnel_transfer_t s_captured_transfers[16];
 static uint8_t s_captured_transfer_count;
@@ -134,6 +135,12 @@ void serial_bridge_swd_cancel(uint8_t transaction_id)
 {
     assert(transaction_id == s_transaction);
     s_cancelled = true;
+}
+
+bool serial_bridge_swd_cancel_complete(uint8_t transaction_id)
+{
+    assert(transaction_id == s_transaction);
+    return s_cancel_complete;
 }
 
 bool serial_bridge_swd_response_take(swd_tunnel_response_t *response)
@@ -347,9 +354,17 @@ int main(void)
     request[3] = 0x02U;
     assert(cmsis_dap_submit(request, 4U));
     s_cancelled = false;
+    s_cancel_complete = false;
     cmsis_dap_abort();
     cmsis_dap_process();
     assert(s_cancelled);
+    assert(!cmsis_dap_response_take(response, &length));
+    s_now_ms = 1000U;
+    cmsis_dap_abort();
+    cmsis_dap_process();
+    assert(!cmsis_dap_response_take(response, &length));
+    s_cancel_complete = true;
+    cmsis_dap_process();
     assert(response_take(response) == 3U);
     assert(response[2] == 0x08U);
 
@@ -371,6 +386,22 @@ int main(void)
     s_now_ms = 5000U;
     cmsis_dap_process();
     assert(s_cancelled);
+    assert(response_take(response) == 3U);
+    assert(response[2] == 0x08U);
+
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_TRANSFER;
+    request[2] = 1U;
+    request[3] = 0x22U;
+    assert(cmsis_dap_submit(request, 4U));
+    assert(response_take(response) == 3U);
+    assert(response[2] == 0x08U);
+
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_TRANSFER;
+    request[2] = 1U;
+    request[3] = 0x10U;
+    assert(cmsis_dap_submit(request, 4U));
     assert(response_take(response) == 3U);
     assert(response[2] == 0x08U);
 

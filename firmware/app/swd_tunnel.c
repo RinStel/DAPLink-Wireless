@@ -28,14 +28,20 @@
 #define SWD_TRANSFER_MATCH_MASK         0x20U
 #define SWD_TRANSFER_MISMATCH           0x10U
 #define SWD_TUNNEL_MAX_MATCH_RETRIES    128U
+#define SWD_TUNNEL_EXECUTION_BUDGET_MS 2500U
 
 static uint8_t s_response[SWD_TUNNEL_MAX_PAYLOAD];
 static uint8_t s_response_length;
+static uint8_t s_request[SWD_TUNNEL_MAX_PAYLOAD];
+static uint8_t s_request_length;
 static uint8_t s_pending_value;
 static uint8_t s_pending_select;
 static uint8_t s_pending_transaction;
 static uint32_t s_pending_deadline_cycles;
 static bool s_pending;
+static bool s_request_ready;
+static bool s_executing;
+static bool s_cancelled;
 static bool s_response_ready;
 static uint32_t s_match_mask;
 static uint16_t s_match_retry;
@@ -93,6 +99,77 @@ static bool swd_sequence_request_valid(const uint8_t *request,
         }
     }
     return input_offset == request_length;
+}
+
+static bool request_valid(const uint8_t *request, uint8_t request_length)
+{
+    uint8_t operation;
+
+    if ((request == NULL) || (request_length < 2U)) {
+        return false;
+    }
+    operation = request[0];
+    if ((operation == SWD_TUNNEL_OP_CONNECT) ||
+        (operation == SWD_TUNNEL_OP_DISCONNECT) ||
+        (operation == SWD_TUNNEL_OP_RESET)) {
+        return request_length == 2U;
+    }
+    if (operation == SWD_TUNNEL_OP_CONFIGURE) {
+        return (request_length == 9U) &&
+               (request[7] >= 1U) && (request[7] <= 4U) &&
+               (request[8] <= 1U);
+    }
+    if (operation == SWD_TUNNEL_OP_PINS) {
+        return request_length == 8U;
+    }
+    if (operation == SWD_TUNNEL_OP_SEQUENCE) {
+        uint16_t bit_count;
+        uint8_t byte_count;
+
+        if (request_length < 5U) {
+            return false;
+        }
+        bit_count = (uint16_t)request[2] |
+                    ((uint16_t)request[3] << 8);
+        byte_count = (uint8_t)((bit_count + 7U) / 8U);
+        return (bit_count != 0U) &&
+               (request_length == (uint8_t)(4U + byte_count));
+    }
+    if (operation == SWD_TUNNEL_OP_CLOCK) {
+        return (request_length == 6U) &&
+               (decode_u32_le(&request[2]) != 0U);
+    }
+    if (operation == SWD_TUNNEL_OP_TRANSFER) {
+        uint8_t count;
+        uint8_t index;
+
+        if (request_length < 3U) {
+            return false;
+        }
+        count = request[2];
+        if ((count == 0U) ||
+            (count > SWD_TUNNEL_MAX_TRANSFERS) ||
+            (request_length != (uint8_t)(3U + count * 5U))) {
+            return false;
+        }
+        for (index = 0U; index < count; ++index) {
+            uint8_t transfer = request[3U + index * 5U];
+
+            if ((((transfer & SWD_TRANSFER_MATCH_MASK) != 0U) &&
+                 ((transfer & 0x02U) != 0U)) ||
+                (((transfer & SWD_TRANSFER_MATCH_VALUE) != 0U) &&
+                 ((transfer & 0x02U) == 0U))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (operation == SWD_TUNNEL_OP_SWD_SEQUENCE) {
+        return (request_length >= 3U) &&
+               swd_sequence_request_valid(
+                   &request[2], (uint8_t)(request_length - 2U));
+    }
+    return false;
 }
 
 uint8_t swd_tunnel_encode_connect(uint8_t transaction_id, uint8_t *payload)
@@ -245,6 +322,7 @@ static bool execute_immediate(const uint8_t *request,
     uint8_t completed = 0U;
     uint8_t raw_length = 0U;
     target_swd_ack_t ack = TARGET_SWD_ACK_OK;
+    uint32_t started_at = board_millis();
 
     if ((request == NULL) || (request_length < 2U) ||
         (response == NULL) || (response_length == NULL)) {
@@ -331,6 +409,11 @@ static bool execute_immediate(const uint8_t *request,
             uint8_t transfer_request = request[offset];
             uint32_t data = decode_u32_le(&request[offset + 1U]);
 
+            if ((uint32_t)(board_millis() - started_at) >=
+                SWD_TUNNEL_EXECUTION_BUDGET_MS) {
+                ack = TARGET_SWD_ACK_WAIT;
+                break;
+            }
             if ((transfer_request & SWD_TRANSFER_MATCH_MASK) != 0U) {
                 s_match_mask = data;
                 ack = TARGET_SWD_ACK_OK;
@@ -350,7 +433,9 @@ static bool execute_immediate(const uint8_t *request,
                     }
                     ++attempts;
                 } while (((data & s_match_mask) != expected) &&
-                         (attempts <= s_match_retry));
+                         (attempts <= s_match_retry) &&
+                         ((uint32_t)(board_millis() - started_at) <
+                          SWD_TUNNEL_EXECUTION_BUDGET_MS));
                 if ((ack == TARGET_SWD_ACK_OK) &&
                     ((data & s_match_mask) != expected)) {
                     ack = (target_swd_ack_t)(
@@ -417,52 +502,64 @@ static bool execute_immediate(const uint8_t *request,
 
 bool swd_tunnel_submit(const uint8_t *request, uint8_t request_length)
 {
-    uint32_t wait_us;
-    uint8_t pins;
-
-    if ((request == NULL) || (request_length < 2U) ||
-        s_pending || s_response_ready) {
+    if (!request_valid(request, request_length) ||
+        s_pending || s_request_ready || s_executing ||
+        s_response_ready) {
         return false;
     }
-    if (request[0] != SWD_TUNNEL_OP_PINS) {
-        if (!execute_immediate(request, request_length, s_response,
-                               &s_response_length)) {
-            return false;
-        }
-        s_response_ready = true;
-        return true;
-    }
-    if (request_length != 8U) {
-        return false;
-    }
-    target_swd_pins_set(request[2], request[3]);
-    pins = target_swd_pins_read();
-    wait_us = decode_u32_le(&request[4]);
-    if ((wait_us == 0U) ||
-        (((pins ^ request[2]) & request[3] & 0x83U) == 0U)) {
-        s_response[0] = SWD_TUNNEL_OP_PINS;
-        s_response[1] = request[1];
-        s_response[2] = 1U;
-        s_response[3] = (uint8_t)TARGET_SWD_ACK_OK;
-        encode_u32_le(&s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE],
-                      pins);
-        s_response_length = SWD_TUNNEL_RESPONSE_HEADER_SIZE + 4U;
-        s_response_ready = true;
-        return true;
-    }
-    s_pending_value = request[2];
-    s_pending_select = request[3];
-    s_pending_transaction = request[1];
-    s_pending_deadline_cycles =
-        board_cycle_count() + board_cycles_from_us(wait_us);
-    s_pending = true;
+    memcpy(s_request, request, request_length);
+    s_request_length = request_length;
+    s_request_ready = true;
+    s_cancelled = false;
     return true;
 }
 
 void swd_tunnel_process(void)
 {
+    uint32_t wait_us;
     uint8_t pins;
 
+    if (s_request_ready) {
+        s_request_ready = false;
+        s_executing = true;
+        if (s_request[0] != SWD_TUNNEL_OP_PINS) {
+            bool executed =
+                execute_immediate(s_request, s_request_length,
+                                  s_response, &s_response_length);
+
+            s_executing = false;
+            if (executed && !s_cancelled) {
+                s_response_ready = true;
+            }
+            return;
+        }
+
+        target_swd_pins_set(s_request[2], s_request[3]);
+        pins = target_swd_pins_read();
+        wait_us = decode_u32_le(&s_request[4]);
+        s_executing = false;
+        if (s_cancelled) {
+            return;
+        }
+        if ((wait_us == 0U) ||
+            (((pins ^ s_request[2]) & s_request[3] & 0x83U) == 0U)) {
+            s_response[0] = SWD_TUNNEL_OP_PINS;
+            s_response[1] = s_request[1];
+            s_response[2] = 1U;
+            s_response[3] = (uint8_t)TARGET_SWD_ACK_OK;
+            encode_u32_le(
+                &s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE], pins);
+            s_response_length = SWD_TUNNEL_RESPONSE_HEADER_SIZE + 4U;
+            s_response_ready = true;
+            return;
+        }
+        s_pending_value = s_request[2];
+        s_pending_select = s_request[3];
+        s_pending_transaction = s_request[1];
+        s_pending_deadline_cycles =
+            board_cycle_count() + board_cycles_from_us(wait_us);
+        s_pending = true;
+    }
     if (!s_pending) {
         return;
     }
@@ -484,8 +581,13 @@ void swd_tunnel_process(void)
 
 void swd_tunnel_cancel(void)
 {
+    s_request_ready = false;
     s_pending = false;
     s_response_ready = false;
+    s_cancelled = true;
+    if (s_executing) {
+        target_swd_abort_request();
+    }
 }
 
 bool swd_tunnel_response_take(uint8_t *response,

@@ -73,6 +73,7 @@ bool serial_bridge_swd_transfers(uint8_t transaction_id,
                                  const swd_tunnel_transfer_t *transfers,
                                  uint8_t count);
 void serial_bridge_swd_cancel(uint8_t transaction_id);
+bool serial_bridge_swd_cancel_complete(uint8_t transaction_id);
 bool serial_bridge_swd_response_take(swd_tunnel_response_t *response);
 void serial_bridge_status_get(serial_bridge_status_t *status);
 

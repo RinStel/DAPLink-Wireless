@@ -30,7 +30,7 @@
 #define TARGET_SWD_MAX_CLOCK_HZ      1000000U
 #define TARGET_SWD_DEFAULT_RETRIES   100U
 #define TARGET_SWD_MAX_WAIT_RETRIES  1024U
-#define TARGET_SWD_TRANSFER_BUDGET_MS 1000U
+#define TARGET_SWD_TRANSFER_BUDGET_MS 250U
 
 static uint32_t s_half_period_cycles;
 static uint32_t s_next_edge_cycle;
@@ -39,6 +39,7 @@ static uint8_t s_idle_cycles = 8U;
 static uint8_t s_turnaround = 1U;
 static bool s_data_phase;
 static volatile bool s_abort_requested;
+static target_swd_poll_hook_t s_poll_hook;
 
 static void clock_delay(void)
 {
@@ -295,15 +296,26 @@ target_swd_ack_t target_swd_transfer(uint8_t request, uint32_t *data)
     uint32_t started_at = board_millis();
     uint16_t retries = 0U;
 
+    if (s_abort_requested) {
+        return TARGET_SWD_ACK_WAIT;
+    }
     do {
         ack = transfer_once(request, data);
         ++retries;
+        if (s_poll_hook != NULL) {
+            s_poll_hook();
+        }
     } while ((ack == TARGET_SWD_ACK_WAIT) &&
              (retries <= s_wait_retries) &&
              ((uint32_t)(board_millis() - started_at) <
               TARGET_SWD_TRANSFER_BUDGET_MS) &&
              !s_abort_requested);
     return ack;
+}
+
+void target_swd_poll_hook_set(target_swd_poll_hook_t hook)
+{
+    s_poll_hook = hook;
 }
 
 void target_swd_abort_request(void)

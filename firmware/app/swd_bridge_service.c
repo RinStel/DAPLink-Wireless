@@ -107,6 +107,7 @@ bool swd_bridge_service_wireless_request(const uint8_t *payload,
         !swd_tunnel_submit(payload, length)) {
         return false;
     }
+    s_expected_transaction = payload[1];
     s_owner = SWD_OWNER_WIRELESS_SLAVE;
     return true;
 }
@@ -127,6 +128,20 @@ bool swd_bridge_service_wireless_response(const uint8_t *payload,
     } else {
         ++s_stale_responses;
     }
+    return true;
+}
+
+bool swd_bridge_service_wireless_abort(uint8_t transaction_id)
+{
+    if ((s_owner != SWD_OWNER_WIRELESS_SLAVE) ||
+        (transaction_id != s_expected_transaction)) {
+        return false;
+    }
+    swd_tunnel_cancel();
+    s_owner = SWD_OWNER_NONE;
+    s_reply_ready = false;
+    s_reply_length = 0U;
+    ++s_cancellations;
     return true;
 }
 

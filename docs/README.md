@@ -4,7 +4,7 @@
 
 - [产品架构](product_architecture.md)
 - [固件模块](firmware_modules.md)
-- [无线协议 v3](radio_protocol_v3.md)
+- [无线协议 v4](radio_protocol_v4.md)
 - [跳频设计](frequency_hopping.md)
 - [USB 配置磁盘](usb_config_disk.md)
 

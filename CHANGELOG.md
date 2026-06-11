@@ -1,5 +1,15 @@
 ﻿# Changelog
 
+## 0.8.0-rc.3 - 2026-06-11
+
+- 将空中协议升级到 v4，增加可靠的无线 `SWD_ABORT` 控制帧。
+- 从机先确认无线 SWD 请求再执行，并在目标 WAIT 重试期间轮询取消请求。
+- 将单次 SWD WAIT 限制为 250 ms，整个隧道请求限制为 2500 ms。
+- 拒绝非法的 Match Mask/Match Value 读写组合。
+- 修复首次射频初始化失败后恢复时缺少新会话广播的问题。
+- 为 USB 配置盘重建增加稳定断开窗口，移除失败路径中的重复重连。
+- 修复 Linux CI 的厂商快照指纹和独立头文件编译问题。
+
 ## 0.8.0-rc.2 - 2026-06-09
 
 - 修正 ResetTarget、Disconnect 和 Match Mismatch 的 CMSIS-DAP 语义。

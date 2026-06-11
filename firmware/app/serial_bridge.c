@@ -29,6 +29,7 @@
 #include "sx128x.h"
 #include "swd_bridge_service.h"
 #include "swd_tunnel.h"
+#include "target_swd.h"
 
 #define BRIDGE_HEADER_SIZE          RADIO_PROTOCOL_HEADER_SIZE
 #define BRIDGE_PAYLOAD_SIZE         RADIO_PROTOCOL_PAYLOAD_SIZE
@@ -59,6 +60,7 @@
 #define BRIDGE_FRAME_SESSION_START   RADIO_FRAME_SESSION_START
 #define BRIDGE_FRAME_HOP_SWITCH      RADIO_FRAME_HOP_SWITCH
 #define BRIDGE_FRAME_HOP_CONFIRM     RADIO_FRAME_HOP_CONFIRM
+#define BRIDGE_FRAME_SWD_ABORT       RADIO_FRAME_SWD_ABORT
 
 typedef radio_frame_type_t bridge_frame_type_t;
 
@@ -113,6 +115,9 @@ static uint32_t s_channel_scan_at;
 static bool s_channel_switch_after_ack;
 static bool s_channel_trial;
 static bool s_hop_request_pending;
+static bool s_swd_abort_pending;
+static bool s_swd_abort_active;
+static uint8_t s_swd_abort_transaction;
 
 static uint32_t local_session_get(void)
 {
@@ -270,6 +275,9 @@ static bool radio_configure(bool start_new_session)
     link_adaptation_init(&s_link_adaptation, profile, board_millis());
     if (start_new_session) {
         local_session_refresh();
+        s_remote_session = 0U;
+        s_remote_session_valid = false;
+        memset(&s_last_rx_key, 0, sizeof(s_last_rx_key));
         s_session_announce_pending = true;
     }
     s_last_valid_rx_ms = board_millis();
@@ -457,6 +465,8 @@ static void frame_deliver(const uint8_t *frame,
                 }
             } else if (pending_type == BRIDGE_FRAME_HOP_CONFIRM) {
                 s_channel_trial = false;
+            } else if (pending_type == BRIDGE_FRAME_SWD_ABORT) {
+                s_swd_abort_active = false;
             }
         }
         return;
@@ -472,7 +482,8 @@ static void frame_deliver(const uint8_t *frame,
         (type != BRIDGE_FRAME_PROFILE_CONFIRM) &&
         (type != BRIDGE_FRAME_SESSION_START) &&
         (type != BRIDGE_FRAME_HOP_SWITCH) &&
-        (type != BRIDGE_FRAME_HOP_CONFIRM)) {
+        (type != BRIDGE_FRAME_HOP_CONFIRM) &&
+        (type != BRIDGE_FRAME_SWD_ABORT)) {
         return;
     }
 
@@ -515,6 +526,11 @@ static void frame_deliver(const uint8_t *frame,
                 s_waiting_ack = false;
                 s_retries = 0U;
             }
+        } else if ((type == BRIDGE_FRAME_SWD_ABORT) &&
+                   (config->device_mode ==
+                    DEVICE_MODE_WIRELESS_SLAVE) &&
+                   (length == 1U)) {
+            (void)swd_bridge_service_wireless_abort(payload[0]);
         } else if ((type == BRIDGE_FRAME_PROFILE_SWITCH) &&
                    (config->device_mode ==
                     DEVICE_MODE_WIRELESS_SLAVE) &&
@@ -583,6 +599,67 @@ static void frame_deliver(const uint8_t *frame,
     if (!ack_send(sequence, rx_status)) {
         s_switch_after_ack = false;
         s_channel_switch_after_ack = false;
+        radio_fail();
+    }
+}
+
+static void swd_radio_abort_poll(void)
+{
+    uint16_t irq_status;
+    uint8_t frame[BRIDGE_FRAME_SIZE];
+    uint8_t length;
+    uint8_t offset;
+    sx128x_packet_status_t packet_status;
+    radio_frame_view_t view;
+
+    serial_service_process();
+    if ((device_config_get()->device_mode !=
+         DEVICE_MODE_WIRELESS_SLAVE) ||
+        !s_radio_ready || (s_tx_kind != TX_NONE) ||
+        !radio_hal_irq_active()) {
+        return;
+    }
+    if (sx128x_get_irq_status(&irq_status) != SX128X_RESULT_OK) {
+        radio_fail();
+        return;
+    }
+    if ((irq_status & SX128X_IRQ_RX_DONE) == 0U) {
+        return;
+    }
+    if ((irq_status & (SX128X_IRQ_CRC_ERROR |
+                       SX128X_IRQ_SYNC_WORD_ERROR)) != 0U) {
+        if ((sx128x_clear_irq_status(irq_status) !=
+             SX128X_RESULT_OK) ||
+            !radio_start_receive()) {
+            radio_fail();
+        }
+        return;
+    }
+    if ((sx128x_get_rx_buffer_status(&length, &offset) !=
+         SX128X_RESULT_OK) ||
+        (length > sizeof(frame)) ||
+        (sx128x_read_buffer(offset, frame, length) !=
+         SX128X_RESULT_OK) ||
+        (sx128x_get_packet_status(&packet_status) !=
+         SX128X_RESULT_OK) ||
+        (sx128x_clear_irq_status(irq_status) != SX128X_RESULT_OK)) {
+        radio_fail();
+        return;
+    }
+    if (radio_protocol_parse(frame, length,
+                             device_config_get()->network_id, &view) &&
+        (view.type == BRIDGE_FRAME_SWD_ABORT) &&
+        (view.payload_length == 1U) &&
+        remote_session_accept(view.session, false)) {
+        (void)swd_bridge_service_wireless_abort(view.payload[0]);
+        valid_rx_mark();
+        activity_signal();
+        if (!ack_send(view.sequence, &packet_status)) {
+            radio_fail();
+        }
+        return;
+    }
+    if (!radio_start_receive()) {
         radio_fail();
     }
 }
@@ -710,8 +787,11 @@ static void swd_tunnel_process_pending(void)
     uint8_t response[BRIDGE_PAYLOAD_SIZE];
     uint8_t response_length;
 
+    if (s_tx_kind != TX_NONE) {
+        return;
+    }
     swd_bridge_service_process();
-    if (s_pending || (s_tx_kind != TX_NONE)) {
+    if (s_pending) {
         return;
     }
     if (swd_bridge_service_reply_take(response, &response_length)) {
@@ -728,6 +808,13 @@ static void wireless_source_process(void)
     uint8_t length;
 
     if (s_pending || (s_tx_kind != TX_NONE)) {
+        return;
+    }
+    if (s_swd_abort_pending &&
+        (config->device_mode == DEVICE_MODE_WIRELESS_HOST)) {
+        data[0] = s_swd_abort_transaction;
+        reliable_queue(BRIDGE_FRAME_SWD_ABORT, data, 1U);
+        s_swd_abort_pending = false;
         return;
     }
     if (s_session_announce_pending) {
@@ -791,7 +878,10 @@ bool serial_bridge_init(void)
     s_channel_trial = false;
     s_channel_switch_after_ack = false;
     s_hop_request_pending = false;
+    s_swd_abort_pending = false;
+    s_swd_abort_active = false;
     s_session_announce_pending = false;
+    target_swd_poll_hook_set(swd_radio_abort_poll);
     s_error = !serial_service_init();
     s_radio_ready = false;
     if (!s_error &&
@@ -820,6 +910,8 @@ bool serial_bridge_apply_config(void)
     s_channel_switch_after_ack = false;
     s_hop_request_pending = false;
     s_hop_success_count = 0U;
+    s_swd_abort_pending = false;
+    s_swd_abort_active = false;
     s_session_announce_pending = false;
     if (device_config_get()->device_mode == DEVICE_MODE_WIRED) {
         radio_hal_frontend_set(RADIO_FRONTEND_STANDBY);
@@ -846,7 +938,7 @@ void serial_bridge_process(void)
     }
     if (!s_radio_ready) {
         if ((int32_t)(board_millis() - s_recover_at) >= 0) {
-            s_radio_ready = radio_configure(false);
+            s_radio_ready = radio_configure(s_local_session == 0U);
             s_error = !s_radio_ready;
             if (s_radio_ready) {
                 ++s_radio_recoveries;
@@ -1112,6 +1204,8 @@ bool serial_bridge_swd_response_take(swd_tunnel_response_t *response)
 
 void serial_bridge_swd_cancel(uint8_t transaction_id)
 {
+    device_mode_t mode = device_config_get()->device_mode;
+
     if (!swd_bridge_service_cancel(transaction_id)) {
         return;
     }
@@ -1123,6 +1217,17 @@ void serial_bridge_swd_cancel(uint8_t transaction_id)
         s_waiting_ack = false;
         s_retries = 0U;
     }
+    if (mode == DEVICE_MODE_WIRELESS_HOST) {
+        s_swd_abort_transaction = transaction_id;
+        s_swd_abort_pending = true;
+        s_swd_abort_active = true;
+    }
+}
+
+bool serial_bridge_swd_cancel_complete(uint8_t transaction_id)
+{
+    return !s_swd_abort_active ||
+           (transaction_id != s_swd_abort_transaction);
 }
 
 void serial_bridge_status_get(serial_bridge_status_t *status)
