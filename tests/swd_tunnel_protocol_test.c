@@ -108,6 +108,7 @@ void target_swd_reset_pulse(uint32_t duration_ms)
 int main(void)
 {
     uint8_t payload[SWD_TUNNEL_MAX_PAYLOAD];
+    uint8_t sequence_data[SWD_TUNNEL_MAX_PAYLOAD - 4U] = {0U};
     uint8_t length;
     swd_tunnel_transfer_t transfer = {
         .request = 0x32U,
@@ -126,6 +127,15 @@ int main(void)
     assert(payload[3] == 0x32U);
     assert(payload[4] == 0x78U);
     assert(payload[7] == 0x12U);
+
+    assert(swd_tunnel_encode_sequence(
+               6U, 480U, sequence_data, payload) == 64U);
+    assert(payload[2] == 0xE0U);
+    assert(payload[3] == 0x01U);
+    assert(swd_tunnel_encode_sequence(
+               6U, 481U, sequence_data, payload) == 0U);
+    assert(swd_tunnel_encode_sequence(
+               6U, UINT16_MAX, sequence_data, payload) == 0U);
 
     assert(swd_tunnel_encode_configure(
                4U, 2U, 0x1234U, 0x5678U, 1U, false, payload) == 9U);
@@ -184,6 +194,13 @@ int main(void)
     s_sequence_transfer_called = false;
     assert(!swd_tunnel_submit(payload, 5U));
     assert(!s_sequence_transfer_called);
+
+    memset(payload, 0, sizeof(payload));
+    payload[0] = SWD_TUNNEL_OP_SEQUENCE;
+    payload[1] = 11U;
+    payload[2] = 0xFFU;
+    payload[3] = 0xFFU;
+    assert(!swd_tunnel_submit(payload, 5U));
 
     length = swd_tunnel_encode_transfers(
         11U, &cancel_transfer, 1U, payload);

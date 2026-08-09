@@ -29,6 +29,9 @@
 #define SWD_TRANSFER_MISMATCH           0x10U
 #define SWD_TUNNEL_MAX_MATCH_RETRIES    128U
 #define SWD_TUNNEL_EXECUTION_BUDGET_MS 2500U
+#define SWD_TUNNEL_SEQUENCE_DATA_OFFSET 4U
+#define SWD_TUNNEL_MAX_SEQUENCE_BITS \
+    ((SWD_TUNNEL_MAX_PAYLOAD - SWD_TUNNEL_SEQUENCE_DATA_OFFSET) * 8U)
 
 static uint8_t s_response[SWD_TUNNEL_MAX_PAYLOAD];
 static uint8_t s_response_length;
@@ -60,6 +63,19 @@ static uint32_t decode_u32_le(const uint8_t *input)
            ((uint32_t)input[1] << 8) |
            ((uint32_t)input[2] << 16) |
            ((uint32_t)input[3] << 24);
+}
+
+static bool sequence_byte_count(uint16_t bit_count, uint8_t *byte_count)
+{
+    uint16_t bytes;
+
+    if ((byte_count == NULL) || (bit_count == 0U) ||
+        (bit_count > SWD_TUNNEL_MAX_SEQUENCE_BITS)) {
+        return false;
+    }
+    bytes = (uint16_t)((bit_count + 7U) / 8U);
+    *byte_count = (uint8_t)bytes;
+    return true;
 }
 
 static bool swd_sequence_request_valid(const uint8_t *request,
@@ -131,9 +147,9 @@ static bool request_valid(const uint8_t *request, uint8_t request_length)
         }
         bit_count = (uint16_t)request[2] |
                     ((uint16_t)request[3] << 8);
-        byte_count = (uint8_t)((bit_count + 7U) / 8U);
-        return (bit_count != 0U) &&
-               (request_length == (uint8_t)(4U + byte_count));
+        return sequence_byte_count(bit_count, &byte_count) &&
+               (request_length == (uint8_t)(
+                   SWD_TUNNEL_SEQUENCE_DATA_OFFSET + byte_count));
     }
     if (operation == SWD_TUNNEL_OP_CLOCK) {
         return (request_length == 6U) &&
@@ -197,18 +213,18 @@ uint8_t swd_tunnel_encode_sequence(uint8_t transaction_id,
                                    const uint8_t *data,
                                    uint8_t *payload)
 {
-    uint8_t byte_count = (uint8_t)((bit_count + 7U) / 8U);
+    uint8_t byte_count;
 
-    if ((payload == NULL) || (data == NULL) || (bit_count == 0U) ||
-        (byte_count > SWD_TUNNEL_MAX_PAYLOAD - 4U)) {
+    if ((payload == NULL) || (data == NULL) ||
+        !sequence_byte_count(bit_count, &byte_count)) {
         return 0U;
     }
     payload[0] = SWD_TUNNEL_OP_SEQUENCE;
     payload[1] = transaction_id;
     payload[2] = (uint8_t)bit_count;
     payload[3] = (uint8_t)(bit_count >> 8);
-    memcpy(&payload[4], data, byte_count);
-    return (uint8_t)(4U + byte_count);
+    memcpy(&payload[SWD_TUNNEL_SEQUENCE_DATA_OFFSET], data, byte_count);
+    return (uint8_t)(SWD_TUNNEL_SEQUENCE_DATA_OFFSET + byte_count);
 }
 
 uint8_t swd_tunnel_encode_swd_sequence(uint8_t transaction_id,
@@ -380,10 +396,11 @@ static bool execute_immediate(const uint8_t *request,
         }
         bit_count = (uint16_t)request[2] |
                     ((uint16_t)request[3] << 8);
-        byte_count = (uint8_t)((bit_count + 7U) / 8U);
-        if ((bit_count == 0U) ||
-            (request_length != (uint8_t)(4U + byte_count)) ||
-            !target_swd_sequence(bit_count, &request[4])) {
+        if (!sequence_byte_count(bit_count, &byte_count) ||
+            (request_length != (uint8_t)(
+                SWD_TUNNEL_SEQUENCE_DATA_OFFSET + byte_count)) ||
+            !target_swd_sequence(
+                bit_count, &request[SWD_TUNNEL_SEQUENCE_DATA_OFFSET])) {
             ack = TARGET_SWD_ACK_PROTOCOL;
         }
     } else if (operation == SWD_TUNNEL_OP_CLOCK) {
