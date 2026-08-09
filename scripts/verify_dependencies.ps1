@@ -3,10 +3,11 @@
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $lockPath = Join-Path $repoRoot "dependencies.lock.json"
+$gitOptions = @("-c", "core.excludesFile=")
 
 function Get-DirectoryTreeFingerprint([string]$relativeDirectory) {
     $entries = @(
-        & git -C $repoRoot ls-files --stage -- $relativeDirectory |
+        & git @gitOptions -C $repoRoot ls-files --stage -- $relativeDirectory |
             ForEach-Object {
                 if ($_ -notmatch '^(\d+) ([0-9a-f]+) \d+\t(.+)$') {
                     throw "Cannot parse Git index entry: $_"
@@ -50,16 +51,16 @@ foreach ($submodule in $lock.submodules) {
             "'git submodule update --init --recursive'."
     }
     $safePath = $path.Replace('\', '/')
-    $head = (& git -c "safe.directory=$safePath" -C $path rev-parse HEAD).
+    $head = (& git @gitOptions -c "safe.directory=$safePath" -C $path rev-parse HEAD).
         Trim()
     if ($LASTEXITCODE -ne 0 -or $head -ne $submodule.commit) {
         throw "Submodule commit mismatch: $($submodule.path)"
     }
-    & git -c "safe.directory=$safePath" -C $path diff --quiet
+    & git @gitOptions -c "safe.directory=$safePath" -C $path diff --quiet
     if ($LASTEXITCODE -ne 0) {
         throw "Submodule has modified tracked files: $($submodule.path)"
     }
-    $untracked = & git -c "safe.directory=$safePath" -C $path `
+    $untracked = & git @gitOptions -c "safe.directory=$safePath" -C $path `
         status --porcelain --untracked-files=normal
     if ($LASTEXITCODE -ne 0 -or $untracked) {
         throw "Submodule worktree is not clean: $($submodule.path)"
@@ -71,12 +72,12 @@ foreach ($snapshot in $lock.vendor_snapshots) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Vendor snapshot is missing: $($snapshot.path)"
     }
-    & git -C $repoRoot diff --quiet HEAD -- $snapshot.path
+    & git @gitOptions -C $repoRoot diff --quiet HEAD -- $snapshot.path
     if ($LASTEXITCODE -ne 0) {
         throw "Vendor snapshot has modified tracked files: " +
             "$($snapshot.path)"
     }
-    $untracked = & git -C $repoRoot ls-files --others `
+    $untracked = & git @gitOptions -C $repoRoot ls-files --others `
         --exclude-standard -- $snapshot.path
     if ($LASTEXITCODE -ne 0 -or $untracked) {
         throw "Vendor snapshot has untracked files: $($snapshot.path)"

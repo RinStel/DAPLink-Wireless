@@ -20,7 +20,8 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $buildRoot = Join-Path $repoRoot "build/host-tests"
-$isWindowsHost = $env:OS -eq "Windows_NT"
+$isWindowsHost = [System.Environment]::OSVersion.Platform -eq `
+    [System.PlatformID]::Win32NT
 
 function Repo-Path([string]$relativePath) {
     return Join-Path $repoRoot $relativePath
@@ -133,6 +134,19 @@ $compilerCommand = Get-Command $Compiler -ErrorAction SilentlyContinue
 if ($null -eq $compilerCommand) {
     throw "Host C compiler not found: $Compiler"
 }
+$compilerPath = $compilerCommand.Source
+if ([string]::IsNullOrWhiteSpace($compilerPath)) {
+    $compilerPath = $compilerCommand.Definition
+}
+if ([string]::IsNullOrWhiteSpace($compilerPath)) {
+    throw "Unable to resolve host C compiler path: $Compiler"
+}
+# GCC may need sibling DLLs and cc1.exe that are not found unless the
+# directory containing the selected executable is on PATH.
+if ($isWindowsHost) {
+    $compilerDirectory = Split-Path -Parent $compilerPath
+    $env:PATH = "$compilerDirectory;$env:PATH"
+}
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 
 $selectedTests = if ($Name -eq "all") {
@@ -172,7 +186,7 @@ foreach ($testName in $selectedTests) {
     }
     $arguments += @("-o", $testExecutable)
 
-    & $compilerCommand.Source @arguments
+    & $compilerPath @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "$($test.label) test compilation failed"
     }

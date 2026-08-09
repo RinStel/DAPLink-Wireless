@@ -3,38 +3,42 @@
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $lockPath = Join-Path $repoRoot "dependencies.lock.json"
+$gitOptions = @("-c", "core.excludesFile=")
 
-& git -C $repoRoot rev-parse --is-inside-work-tree | Out-Null
+& git @gitOptions -C $repoRoot rev-parse --is-inside-work-tree | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "The project is not inside a Git worktree"
 }
 
-$headExists = (& git -C $repoRoot rev-parse --verify HEAD 2>$null)
-$worktreeChanges = @(& git -C $repoRoot status --porcelain `
+$headExists = (& git @gitOptions -C $repoRoot rev-parse --verify HEAD 2>$null)
+$worktreeChanges = @(& git @gitOptions -C $repoRoot status --porcelain `
     --untracked-files=normal)
 if ($LASTEXITCODE -eq 0 -and -not $worktreeChanges) {
-    $whitespaceErrors = & git -C $repoRoot diff-tree --check --root `
-        --no-commit-id -r HEAD 2>&1
+    $whitespaceErrors = & git @gitOptions -C $repoRoot diff-tree --check --root `
+        --no-commit-id -r HEAD 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "Git HEAD whitespace check failed:`n$(
             $whitespaceErrors -join "`n")"
     }
 }
 
-$whitespaceErrors = & git -C $repoRoot diff --check 2>&1
+# Git can report an inaccessible user-global excludes file on locked-down
+# Windows profiles. That warning is unrelated to the repository check; keep
+# stdout for actual whitespace findings and inspect the exit code separately.
+$whitespaceErrors = & git @gitOptions -C $repoRoot diff --check 2>$null
 if ($LASTEXITCODE -ne 0) {
     throw "Git worktree whitespace check failed:`n$(
         $whitespaceErrors -join "`n")"
 }
 
-$whitespaceErrors = & git -C $repoRoot diff --cached --check 2>&1
+$whitespaceErrors = & git @gitOptions -C $repoRoot diff --cached --check 2>$null
 if ($LASTEXITCODE -ne 0) {
     throw "Git index whitespace check failed:`n$(
         $whitespaceErrors -join "`n")"
 }
 
 $indexEntries = @{}
-foreach ($line in (& git -C $repoRoot ls-files --stage)) {
+foreach ($line in (& git @gitOptions -C $repoRoot ls-files --stage)) {
     if ($line -notmatch '^(\d{6}) ([0-9a-f]{40,64}) \d+\t(.+)$') {
         throw "Unable to parse Git index entry: $line"
     }
@@ -110,7 +114,7 @@ foreach ($submodule in $lock.submodules) {
     if ($entry.object -ne $submodule.commit) {
         throw "Indexed submodule commit differs from dependency lock: $path"
     }
-    $url = (& git -C $repoRoot config -f .gitmodules `
+    $url = (& git @gitOptions -C $repoRoot config -f .gitmodules `
         --get "submodule.$path.url").Trim()
     if ($LASTEXITCODE -ne 0 -or $url -ne $submodule.url) {
         throw "Submodule URL differs from dependency lock: $path"

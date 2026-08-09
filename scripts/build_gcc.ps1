@@ -11,9 +11,11 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "release_common.ps1")
 $configurationName = $Configuration.ToLowerInvariant()
 $buildDir = Join-Path $repoRoot "build/gcc/$configurationName"
+$isWindowsHost = [System.Environment]::OSVersion.Platform -eq `
+    [System.PlatformID]::Win32NT
 
 function Find-Tool([string]$name, [string]$directory = "") {
-    $fileNames = if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    $fileNames = if ($isWindowsHost) {
         @("$name.exe", $name)
     } else {
         @($name)
@@ -52,6 +54,11 @@ if ([string]::IsNullOrWhiteSpace($ToolchainBin)) {
 $gcc = Find-Tool "arm-none-eabi-gcc" $ToolchainBin
 $objcopy = Find-Tool "arm-none-eabi-objcopy" $ToolchainBin
 $size = Find-Tool "arm-none-eabi-size" $ToolchainBin
+# GCC invokes sibling programs such as cc1.exe and the assembler. Keep the
+# selected toolchain directory visible to those child processes on Windows.
+if ($isWindowsHost) {
+    $env:PATH = "$ToolchainBin;$env:PATH"
+}
 $firmwareVersionHeader =
     Join-Path $repoRoot "firmware/app/firmware_version.h"
 

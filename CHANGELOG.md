@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## Unreleased
+
+- 收紧无线 SWD Sequence 的 bit_count 边界，拒绝会因 `uint8_t` 截断而形成的畸形请求，并增加最大载荷回归测试。
+- 修复 Windows PowerShell 下 GCC 子工具、主机测试编译器和 Git 全局 excludes 权限警告导致的门禁不稳定问题。
+
 ## 0.8.0-rc.3 - 2026-06-11
 
 - 将空中协议升级到 v4，增加可靠的无线 `SWD_ABORT` 控制帧。
