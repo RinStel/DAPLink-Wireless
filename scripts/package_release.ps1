@@ -69,12 +69,12 @@ Copy-Item (Join-Path $repoRoot "Third-Party/CMSIS-DAP/LICENSE") `
 $docsDir = Join-Path $packageDir "docs"
 New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
 $releaseDocs = @(
-    "release_checklist.md",
-    "hardware_acceptance.md",
-    "cmsis_dap_validation.md",
-    "usb_config_disk.md",
-    "radio_protocol_v4.md",
-    "frequency_hopping.md"
+    "README.md",
+    "project_manual.md",
+    "hardware_manual.md",
+    "wireless_manual.md",
+    "development_release_manual.md",
+    "schematic_u5_connections.md"
 )
 foreach ($doc in $releaseDocs) {
     Copy-Item (Join-Path $repoRoot "docs/$doc") $docsDir

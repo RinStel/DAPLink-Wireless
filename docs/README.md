@@ -1,23 +1,28 @@
-# 项目文档
+# 项目文档索引
 
-## 架构与实现
+建议先阅读[项目手册](project_manual.md)，再根据工作内容进入对应手册。
 
-- [产品架构](product_architecture.md)
-- [固件模块](firmware_modules.md)
-- [无线协议 v4](radio_protocol_v4.md)
-- [跳频设计](frequency_hopping.md)
-- [USB 配置磁盘](usb_config_disk.md)
+## 项目手册
 
-## 开发与调试
+- [项目手册：产品、固件与 USB 配置](project_manual.md)
+- [硬件手册：原理图、板级安全与验收](hardware_manual.md)
+- [无线手册：协议 v1、跳频与射频验证](wireless_manual.md)
+- [开发与发布手册：验证、依赖和门禁](development_release_manual.md)
 
-- [开发路线](roadmap.md)
-- [开发任务](development_tasks.md)
-- [硬件审查](hardware_review.md)
-- [射频启动流程](radio_bringup.md)
-- [厂商依赖](vendor_dependencies.md)
+## 原理图与版本事实
 
-## 验证与发布
+- [U5 原理图连接记录](schematic_u5_connections.md)：EasyEDA 读取的完整 U5 网络、跨页连接、当前代码差异和 `待确认：` 项。
+- [变更记录](../CHANGELOG.md)：固件发布候选版本和未发布变更历史。
 
-- [发布检查清单](release_checklist.md)
-- [硬件验收](hardware_acceptance.md)
-- [CMSIS-DAP 验证](cmsis_dap_validation.md)
+## 归属与许可证
+
+- [第三方声明](../THIRD_PARTY_NOTICES.md)
+- [项目许可证](../LICENSE)
+
+## 版本说明
+
+固件发布版本由 `FIRMWARE_VERSION_STRING` 表示，当前为 `0.8.0-rc.3`；无线帧
+协议版本由 `RADIO_PROTOCOL_VERSION` 表示，当前为 `1U`。两者不可互换。
+
+第三方 CMSIS-DAP 文档位于 `Third-Party/CMSIS-DAP/**`，属于上游资料，不在本项目
+手册中重写。

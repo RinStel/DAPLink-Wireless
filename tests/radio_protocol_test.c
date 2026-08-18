@@ -21,6 +21,7 @@ int main(void)
                                   0x12345678U, 0xAABBCCDDU,
                                   7U, payload, sizeof(payload));
     assert(length == RADIO_PROTOCOL_HEADER_SIZE + sizeof(payload));
+    assert(frame[2] == 1U);
     assert(frame[2] == RADIO_PROTOCOL_VERSION);
     assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
     assert(view.type == RADIO_FRAME_DATA);
@@ -35,9 +36,9 @@ int main(void)
     ++second.sequence;
     assert(!radio_protocol_key_equal(&first, &second));
 
-    frame[2] ^= 1U;
+    frame[2] = 4U;
     assert(!radio_protocol_parse(frame, length, 0x12345678U, &view));
-    frame[2] ^= 1U;
+    frame[2] = RADIO_PROTOCOL_VERSION;
     frame[16] = 5U;
     assert(!radio_protocol_parse(frame, length, 0x12345678U, &view));
 

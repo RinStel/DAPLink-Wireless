@@ -1,8 +1,11 @@
-﻿# DAPLink-Wireless
+# DAPLink-Wireless
 
-基于两块相同硬件构成的无线 CMSIS-DAP v2 调试器。硬件版本为
-`v0.5`，主控为 GD32F303CCT6，无线模块为基于 SX1281 的
-E28-2G4M20SX。
+基于两块相同硬件构成的无线 CMSIS-DAP v2 调试器。主控为 `GD32F303CCT6`，
+无线模块为基于 SX1281 的 `E28-2G4M20SX`。
+
+当前固件发布候选版本为 `0.8.0-rc.3`，无线链路协议为 `v1`。固件发布版本和
+无线协议版本是独立标识；当前 EasyEDA 记录中的 `Board_V1.0` 与项目文档硬件
+版本 `v0.5` 的对应关系为 `待确认：`。
 
 ## 功能
 
@@ -14,35 +17,33 @@ E28-2G4M20SX。
 - USB 虚拟磁盘通过 `CONFIG.TXT` 修改配置，并原子写入 Flash。
 - 独立看门狗、复位原因和链路诊断统计。
 
-项目仅提供 CMSIS-DAP v2 Bulk 接口，不再兼容 CMSIS-DAP v1 HID。
+项目仅提供 CMSIS-DAP v2 Bulk 接口，不兼容 CMSIS-DAP v1 HID。
 
-## 构建与验证
+## 快速开始
 
-克隆后先初始化 CMSIS-DAP submodule：
+初始化 CMSIS-DAP submodule：
 
 ```powershell
 git submodule update --init --recursive
 ```
 
-GD32F30x V3.0.3 保留为 `vendor/` 下的厂商快照，不使用 submodule。
-`dependencies.lock.json` 锁定 submodule 提交和厂商快照哈希，构建前会自动
-检查依赖是否缺失或被修改。
+运行主机测试：
+
+```powershell
+.\scripts\test_host.ps1 -Name all
+```
+
+运行软件发布门禁：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 ```
 
-该命令依次运行 Git 索引与源码树洁净性检查、主机侧协议测试、
-GCC Debug/Release 严格构建、产物哈希和栈占用检查。安装 Keil 后还会构建
-`firmware/project.uvprojx`，所有 GCC/Keil 输出均写入 `build/`。
-GitHub Actions 在 `ubuntu-24.04` 上使用 Arm GNU 13.3.Rel1 执行同一软件
-门禁并上传固件产物；Keil 零警告构建仍由本地发布流程负责。
-
-单独运行全部或指定主机测试：
+只构建 GCC Debug/Release 固件：
 
 ```powershell
-.\scripts\test_host.ps1
-.\scripts\test_host.ps1 -Name cmsis-dap
+.\scripts\build_gcc.ps1 -Configuration Debug
+.\scripts\build_gcc.ps1 -Configuration Release
 ```
 
 生成发布候选包：
@@ -51,12 +52,20 @@ GitHub Actions 在 `ubuntu-24.04` 上使用 Arm GNU 13.3.Rel1 执行同一软件
 powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1
 ```
 
-构建输出位于 `build/gcc`，发布包位于 `dist`。
+输出位于 `build/gcc`，发布包位于 `dist`。GD32F30x V3.0.3 以厂商快照形式保留
+在 `vendor/`；`dependencies.lock.json` 锁定 submodule 提交和厂商快照哈希。
 
-## 配置
+## 文档
 
-设备枚举出的虚拟磁盘包含 `CONFIG.TXT` 和 `STATUS.TXT`。配置项包括设备
-模式、同步码、调制方式、空中速率及串口参数。短按按键切换空中速率，长按
-两秒切换设备模式；SWD 事务进行中禁止修改配置。
+从[项目文档索引](docs/README.md)开始：
 
-具体协议、配置格式和实机验证步骤参见[项目文档](docs/README.md)。
+- [项目手册](docs/project_manual.md)：产品架构、固件模块和 USB 配置。
+- [硬件手册](docs/hardware_manual.md)：原理图基线、GPIO 差异、上电和验收。
+- [无线手册](docs/wireless_manual.md)：协议 v1、跳频和射频验证。
+- [开发与发布手册](docs/development_release_manual.md)：测试、依赖和发布门禁。
+- [U5 原理图连接记录](docs/schematic_u5_connections.md)：EasyEDA 网络事实与当前代码差异。
+- [变更记录](CHANGELOG.md)
+- [第三方声明](THIRD_PARTY_NOTICES.md)
+
+原理图记录中的“当前代码状态”不代表固件已完成 GPIO 同步；硬件映射更新前，
+请按硬件手册中的 `待确认：` 项逐项校对。
