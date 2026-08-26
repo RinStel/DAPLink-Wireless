@@ -22,13 +22,16 @@
 
 #include "device_config.h"
 
+/* 初始化 MSC 配置卷和复合 USB 设备。 */
 bool usb_config_disk_init(void);
 void usb_config_disk_process(void);
+/* 仅在 USB 枚举完成且最近一次配置应用成功后返回 true。 */
 bool usb_config_disk_configured(void);
 
 void usb_config_disk_irq(void);
 void usb_config_disk_hp_irq(void);
 void usb_config_disk_wakeup_irq(void);
+/* 外部设置变更后请求一次断开、应用配置并重新连接。 */
 void usb_config_disk_refresh(const device_config_t *previous);
 
 #endif

@@ -19,6 +19,7 @@
 
 #include <stddef.h>
 
+/* 类专用 vendor 请求由当前活动的复合类处理。 */
 usb_reqsta usbd_vendor_request(usb_dev *udev, usb_req *req)
 {
     if ((udev == NULL) || (req == NULL) ||

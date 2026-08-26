@@ -17,6 +17,7 @@
  */
 #include "usb_composite.h"
 
+#include "board.h"
 #include "cdc_acm_core.h"
 #include "cdc_acm_transport.h"
 #include "cmsis_dap_usb.h"
@@ -26,12 +27,15 @@
 
 #include <stddef.h>
 
+/* 描述符接口顺序必须与 usbd_conf.h 一致：MSC(0)、CDC 控制/数据(1/2)、
+ * vendor CMSIS-DAP v2(3)。 */
 #define COMPOSITE_CONFIG_DESC_SIZE 121U
 #define USB_DESCRIPTOR_TYPE_IAD    0x0BU
 #define USB_CLASS_VENDOR_SPECIFIC  0xFFU
 #define MS_OS_STRING_INDEX         0xEEU
 #define MS_OS_VENDOR_CODE          0x20U
 #define MS_OS_COMPAT_ID_INDEX      0x0004U
+#define MS_OS_EXT_PROP_INDEX       0x0005U
 
 #pragma pack(1)
 typedef struct {
@@ -64,11 +68,26 @@ typedef struct {
     usb_desc_ep dap_v2_out_ep;
     usb_desc_ep dap_v2_in_ep;
 } composite_config_desc_t;
+
+typedef struct {
+    uint32_t length;
+    uint16_t version;
+    uint16_t index;
+    uint16_t property_count;
+    uint32_t property_size;
+    uint32_t property_type;
+    uint16_t property_name_length;
+    uint16_t property_name[21];
+    uint32_t property_data_length;
+    uint16_t property_data[40];
+} ms_os_ext_property_desc_t;
 #pragma pack()
 
 _Static_assert(sizeof(composite_config_desc_t) ==
                COMPOSITE_CONFIG_DESC_SIZE,
                "Composite USB descriptor size mismatch");
+_Static_assert(sizeof(ms_os_ext_property_desc_t) == 146U,
+               "Microsoft OS property descriptor size mismatch");
 
 static uint8_t composite_init(usb_dev *udev, uint8_t config_index);
 static uint8_t composite_deinit(usb_dev *udev, uint8_t config_index);
@@ -92,6 +111,8 @@ static const usb_desc_dev s_device_desc = {
 };
 
 static const composite_config_desc_t s_config_desc = {
+    /* Windows 通过下方 Microsoft OS compatible-ID 描述符绑定 DAP 接口；
+     * 修改接口编号也会改变该绑定。 */
     .config = {
         .header = {sizeof(usb_desc_config), USB_DESCTYPE_CONFIG},
         .wTotalLength = COMPOSITE_CONFIG_DESC_SIZE,
@@ -232,15 +253,12 @@ static const usb_desc_LANGID s_language = {
 
 static const usb_desc_str s_manufacturer = {
     .header = {USB_STRING_LEN(7U), USB_DESCTYPE_STR},
-    .unicode_string = {'D', 'A', 'P', 'L', 'i', 'n', 'k'}
+    .unicode_string = {'R', 'i', 'n', 'S', 't', 'e', 'l'}
 };
 
 static const usb_desc_str s_product = {
-    .header = {USB_STRING_LEN(16U), USB_DESCTYPE_STR},
-    .unicode_string = {
-        'D', 'A', 'P', 'L', 'i', 'n', 'k', '-',
-        'W', 'i', 'r', 'e', 'l', 'e', 's', 's'
-    }
+    .header = {USB_STRING_LEN(9U), USB_DESCTYPE_STR},
+    .unicode_string = {'C', 'M', 'S', 'I', 'S', '-', 'D', 'A', 'P'}
 };
 
 static usb_desc_str s_serial = {
@@ -278,6 +296,27 @@ static const uint8_t s_ms_compat_id[40] = {
     0U, 0U, 0U, 0U, 0U, 0U
 };
 
+static const ms_os_ext_property_desc_t s_ms_ext_property = {
+    .length = sizeof(ms_os_ext_property_desc_t),
+    .version = 0x0100U,
+    .index = MS_OS_EXT_PROP_INDEX,
+    .property_count = 1U,
+    .property_size = sizeof(ms_os_ext_property_desc_t) - 10U,
+    .property_type = 7U,
+    .property_name_length = 42U,
+    .property_name = {
+        'D', 'e', 'v', 'i', 'c', 'e', 'I', 'n', 't', 'e', 'r', 'f',
+        'a', 'c', 'e', 'G', 'U', 'I', 'D', 's', 0U
+    },
+    .property_data_length = 80U,
+    .property_data = {
+        '{', '7', 'E', '5', 'A', '8', 'D', '6', 'B', '-',
+        '4', 'F', '7', '2', '-', '4', 'A', '3', 'C', '-',
+        '9', 'B', '1', '6', '-', '2', 'D', '8', 'C', '1',
+        'E', '0', 'F', '5', '3', '4', '7', '}', 0U, 0U
+    }
+};
+
 /*
  * The GD32 USB stack indexes this table directly for GET_DESCRIPTOR(String).
  * Keep the Microsoft OS string at its standard 0xEE index without extending
@@ -309,7 +348,21 @@ usb_class composite_class = {
 
 void usb_composite_prepare(void)
 {
+    uint32_t device_id = board_device_id_hash();
     uint16_t index;
+    uint8_t digit;
+    static const char hex[] = "0123456789ABCDEF";
+
+    /* Generate unique 12-character serial number from device ID */
+    for (digit = 0U; digit < 8U; ++digit) {
+        s_serial.unicode_string[digit] =
+            hex[(device_id >> ((7U - digit) * 4U)) & 0x0FU];
+    }
+    /* Pad with device-specific suffix for full 12 chars */
+    for (digit = 8U; digit < 12U; ++digit) {
+        s_serial.unicode_string[digit] =
+            hex[(device_id >> ((digit - 8U) * 4U)) & 0x0FU];
+    }
 
     for (index = 0U; index < 256U; ++index) {
         if (s_strings[index] == NULL) {
@@ -332,6 +385,7 @@ static uint8_t composite_init(usb_dev *udev, uint8_t config_index)
         (void)msc_class.deinit(udev, config_index);
         return USBD_FAIL;
     }
+
     return USBD_OK;
 }
 
@@ -362,6 +416,16 @@ static uint8_t composite_request(usb_dev *udev, usb_req *req)
         usb_transc_config(
             &udev->transc_in[0], (uint8_t *)s_ms_compat_id,
             USB_MIN(req->wLength, sizeof(s_ms_compat_id)), 0U);
+        return REQ_SUPP;
+    }
+    if (req->bmRequestType ==
+            (USB_TRX_IN | USB_REQTYPE_VENDOR | USB_RECPTYPE_ITF) &&
+        (req->bRequest == MS_OS_VENDOR_CODE) &&
+        (req->wValue == DAP_V2_INTERFACE) &&
+        (req->wIndex == MS_OS_EXT_PROP_INDEX)) {
+        usb_transc_config(
+            &udev->transc_in[0], (uint8_t *)&s_ms_ext_property,
+            USB_MIN(req->wLength, sizeof(s_ms_ext_property)), 0U);
         return REQ_SUPP;
     }
     if (recipient == USB_RECPTYPE_ITF) {

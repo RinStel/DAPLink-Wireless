@@ -30,6 +30,8 @@ static inline bool usb_disk_byte_range_valid(uint32_t disk_size,
 {
     uint32_t length;
 
+    /* 先校验对齐和范围，再做减法，避免越界地址导致 disk_size-byte_address
+     * 下溢。 */
     if ((block_size == 0U) ||
         ((byte_address % block_size) != 0U) ||
         (byte_address > disk_size)) {

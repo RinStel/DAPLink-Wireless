@@ -22,12 +22,17 @@
 #include <stdint.h>
 
 #define CMSIS_DAP_PACKET_SIZE 64U
+/* DAP_Info(0xFE) 对主机公布的请求/响应流水线深度。 */
+#define CMSIS_DAP_PACKET_COUNT 4U
 
+/* submit 会复制包；process 推进异步桥接操作。 */
 void cmsis_dap_init(void);
 bool cmsis_dap_submit(const uint8_t *request, uint8_t length);
+/* Abort 为带外命令，不生成 CMSIS-DAP 响应包。 */
 void cmsis_dap_abort(void);
 void cmsis_dap_process(void);
 bool cmsis_dap_busy(void);
+/* take 复制一个已完成响应，并清除核心 ready 状态。 */
 bool cmsis_dap_response_take(uint8_t *response, uint8_t *length);
 
 #endif

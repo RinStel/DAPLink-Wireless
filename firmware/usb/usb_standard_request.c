@@ -23,6 +23,8 @@
 usb_reqsta gd32_usbd_standard_request_unchecked(
     usb_dev *udev, usb_req *req);
 
+/* 厂商库默认 recipient 合法；委托前先校验 recipient、接口、端点和标准请求
+ * 范围。 */
 static bool request_recipient_valid(const usb_req *req)
 {
     uint8_t recipient = req->bmRequestType & USB_RECPTYPE_MASK;

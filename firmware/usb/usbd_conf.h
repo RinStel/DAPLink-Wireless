@@ -18,7 +18,7 @@
 #ifndef USBD_CONF_H
 #define USBD_CONF_H
 
-#include "gd32f30x.h"
+#include "board_pins.h"
 
 #define EP_COUNT                 6U
 #define USBD_ITF_MAX_NUM         4U
@@ -28,30 +28,44 @@
 #define CDC_DATA_INTERFACE       2U
 #define MEM_LUN_NUM              1U
 
-#define BTABLE_OFFSET            0x0000U
-#define EP0_TX_ADDR              0x0040U
-#define EP0_RX_ADDR              0x0080U
-#define BULK_TX_ADDR             0x00C0U
-#define BULK_RX_ADDR             0x0100U
-#define CDC_BULK_TX_ADDR         0x0140U
-#define CDC_BULK_RX_ADDR         0x0150U
-#define CDC_INT_TX_ADDR          0x0160U
-#define DAP_V2_TX_ADDR           0x0168U
-#define DAP_V2_RX_ADDR           0x01A8U
+/* 运行期 bulk 端点保持全速 USB 最大包长；仅低频控制端点 EP0 使用
+ * USB 2.0 允许的 32 字节包，以便所有单缓冲端点装入 512 字节 PMA。 */
+#define USBD_EP0_MAX_SIZE         32U
+#define MSC_DATA_PACKET_SIZE      64U
+#define CDC_ACM_DATA_PACKET_SIZE  64U
+#define CDC_ACM_CMD_PACKET_SIZE    8U
+#define DAP_USB_PACKET_SIZE       64U
 
+/* PMA 地址按实际包长连续推导，所有边界至少 8 字节对齐。 */
+#define USB_PMA_SIZE             0x0200U
+#define BTABLE_OFFSET            0x0000U
+#define USB_BTABLE_SIZE          (EP_COUNT * 8U)
+#define EP0_TX_ADDR              (BTABLE_OFFSET + USB_BTABLE_SIZE)
+#define EP0_RX_ADDR              (EP0_TX_ADDR + USBD_EP0_MAX_SIZE)
+#define BULK_TX_ADDR             (EP0_RX_ADDR + USBD_EP0_MAX_SIZE)
+#define BULK_RX_ADDR             (BULK_TX_ADDR + MSC_DATA_PACKET_SIZE)
+#define CDC_BULK_TX_ADDR         (BULK_RX_ADDR + MSC_DATA_PACKET_SIZE)
+#define CDC_BULK_RX_ADDR         (CDC_BULK_TX_ADDR + CDC_ACM_DATA_PACKET_SIZE)
+#define CDC_INT_TX_ADDR          (CDC_BULK_RX_ADDR + CDC_ACM_DATA_PACKET_SIZE)
+#define DAP_V2_TX_ADDR           (CDC_INT_TX_ADDR + CDC_ACM_CMD_PACKET_SIZE)
+#define DAP_V2_RX_ADDR           (DAP_V2_TX_ADDR + DAP_USB_PACKET_SIZE)
+#define USB_PMA_END_ADDR         (DAP_V2_RX_ADDR + DAP_USB_PACKET_SIZE)
+
+#if USB_PMA_END_ADDR > USB_PMA_SIZE
+#error "USB PMA layout exceeds the 512-byte hardware limit"
+#endif
+
+/* 端点编号必须与复合描述符及接口所有权一致。 */
 #define MSC_IN_EP                0x81U
 #define MSC_OUT_EP               0x02U
-#define MSC_DATA_PACKET_SIZE     64U
 #define MSC_MEDIA_PACKET_SIZE    512U
 
 #define CDC_IN_EP                0x83U
 #define CDC_OUT_EP               0x03U
 #define CDC_CMD_EP               0x84U
-#define CDC_ACM_DATA_PACKET_SIZE 16U
-#define CDC_ACM_CMD_PACKET_SIZE  8U
 #define INT_TX_ADDR              CDC_INT_TX_ADDR
 
-#define USB_PULLUP               GPIOB
-#define USB_PULLUP_PIN           GPIO_PIN_8
+#define USB_PULLUP               BOARD_USB_PULLUP_PORT
+#define USB_PULLUP_PIN           BOARD_USB_PULLUP_PIN
 
 #endif

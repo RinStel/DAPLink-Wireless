@@ -6,6 +6,7 @@
 #include "serial_bridge.h"
 #include "target_swd.h"
 
+/* 主机替身隔离 CMSIS-DAP 解析器与无线、UART 和 SWD 硬件。 */
 #define DAP_INFO               0x00U
 #define DAP_CONNECT            0x02U
 #define DAP_DISCONNECT         0x03U
@@ -13,6 +14,7 @@
 #define DAP_TRANSFER           0x05U
 #define DAP_RESET_TARGET       0x0AU
 #define DAP_SWD_SEQUENCE       0x1DU
+#define CMSIS_DAP_PROTOCOL_VERSION "2.1.2"
 
 static uint32_t s_now_ms;
 static uint8_t s_transaction;
@@ -195,13 +197,28 @@ int main(void)
     assert(response[2] == 1U);
 
     request[0] = DAP_INFO;
+    request[1] = 0x01U;
+    assert(cmsis_dap_submit(request, 2U));
+    assert(response_take(response) == 10U);
+    assert(response[1] == 8U);
+    assert(strcmp((char *)&response[2], "RinStel") == 0);
+
+    request[1] = 0x02U;
+    assert(cmsis_dap_submit(request, 2U));
+    assert(response_take(response) == 12U);
+    assert(response[1] == 10U);
+    assert(strcmp((char *)&response[2], "CMSIS-DAP") == 0);
+
+    request[0] = DAP_INFO;
     request[1] = 0x04U;
     assert(cmsis_dap_submit(request, sizeof(request)));
     length = response_take(response);
-    assert(length == (uint8_t)(sizeof(FIRMWARE_VERSION_STRING) + 2U));
+    assert(length ==
+           (uint8_t)(sizeof(CMSIS_DAP_PROTOCOL_VERSION) + 2U));
     assert(response[0] == DAP_INFO);
-    assert(response[1] == sizeof(FIRMWARE_VERSION_STRING));
-    assert(strcmp((char *)&response[2], FIRMWARE_VERSION_STRING) == 0);
+    assert(response[1] == sizeof(CMSIS_DAP_PROTOCOL_VERSION));
+    assert(strcmp((char *)&response[2],
+                  CMSIS_DAP_PROTOCOL_VERSION) == 0);
 
     request[0] = DAP_INFO;
     request[1] = 0xF0U;
@@ -217,6 +234,13 @@ int main(void)
     assert(response_take(response) ==
            (uint8_t)(sizeof(FIRMWARE_VERSION_STRING) + 2U));
     assert(strcmp((char *)&response[2], FIRMWARE_VERSION_STRING) == 0);
+
+    request[1] = 0xFEU;
+    assert(cmsis_dap_submit(request, 2U));
+    assert(response_take(response) == 3U);
+    assert(response[0] == DAP_INFO);
+    assert(response[1] == 1U);
+    assert(response[2] == CMSIS_DAP_PACKET_COUNT);
 
     request[0] = 0x55U;
     assert(cmsis_dap_submit(request, 1U));
@@ -289,10 +313,8 @@ int main(void)
         request[offset + 1U] = index;
     }
     assert(cmsis_dap_submit(request, 63U));
-    assert(s_captured_transfer_count == 10U);
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 10U, TARGET_SWD_ACK_OK);
-    assert(s_captured_transfer_count == 2U);
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 2U, TARGET_SWD_ACK_OK);
+    assert(s_captured_transfer_count == 12U);
+    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 12U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 3U);
     assert(response[1] == 12U);
     assert(response[2] == TARGET_SWD_ACK_OK);
@@ -304,11 +326,9 @@ int main(void)
         request[3U + index * 5U] = 0x00U;
     }
     assert(cmsis_dap_submit(request, 63U));
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 10U, TARGET_SWD_ACK_OK);
-    assert(s_captured_transfer_count == 2U);
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 10U, TARGET_SWD_ACK_OK);
+    assert(s_captured_transfer_count == 12U);
+    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 13U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 3U);
-    assert(response[1] == 10U);
     assert(response[2] == 0x08U);
 
     memset(request, 0, sizeof(request));

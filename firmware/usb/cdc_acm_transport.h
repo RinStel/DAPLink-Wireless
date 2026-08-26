@@ -25,8 +25,10 @@
 
 extern usb_class cdc_class;
 
+/* 轮询 API：read/write 在 CDC 缓冲环与调用方存储之间复制字节。 */
 uint16_t cdc_acm_read(uint8_t *data, uint16_t capacity);
 uint16_t cdc_acm_write(const uint8_t *data, uint16_t length);
+uint16_t cdc_acm_tx_free(void);
 bool cdc_acm_tx_ready(void);
 bool cdc_acm_line_coding_take(acm_line *line);
 

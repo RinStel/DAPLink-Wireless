@@ -25,6 +25,8 @@
 #include "serial_bridge.h"
 #include "target_swd.h"
 
+/* 命令核心仅在主循环中运行。USB 可以排队，但本模块一次只推进一个
+ * 异步 SWD 事务。 */
 #define DAP_INFO                  0x00U
 #define DAP_HOST_STATUS           0x01U
 #define DAP_CONNECT               0x02U
@@ -51,6 +53,7 @@
 #define DAP_INFO_CAPABILITIES     0xF0U
 #define DAP_INFO_PACKET_COUNT     0xFEU
 #define DAP_INFO_PACKET_SIZE      0xFFU
+#define CMSIS_DAP_PROTOCOL_VERSION "2.1.2"
 
 #define DAP_PORT_DISABLED         0x00U
 #define DAP_PORT_SWD              0x01U
@@ -91,6 +94,7 @@ static bool s_response_ready;
 static bool s_connected;
 static bool s_transfer_block;
 static bool s_write_abort;
+#define CMSIS_DAP_TUNNEL_CHUNK_MAX 16U
 static bool s_cancel_waiting;
 static uint8_t s_idle_cycles;
 static uint16_t s_retry_count;
@@ -164,6 +168,7 @@ static void command_vendor_status(void)
 
 static void response_finish(uint8_t length)
 {
+    /* response-ready 置位后保持 busy，直到 USB 传输层复制走响应。 */
     s_response_length = length;
     s_response_ready = true;
     s_state = DAP_STATE_IDLE;
@@ -206,9 +211,9 @@ static void command_info(void)
     s_response[0] = DAP_INFO;
     info_id = s_request[1];
     if (info_id == DAP_INFO_VENDOR) {
-        info_string("DAPLink");
+        info_string("RinStel");
     } else if (info_id == DAP_INFO_PRODUCT) {
-        info_string("DAPLink-Wireless");
+        info_string("CMSIS-DAP");
     } else if (info_id == DAP_INFO_SERIAL) {
         char serial[9];
         static const char digits[] = "0123456789ABCDEF";
@@ -221,8 +226,9 @@ static void command_info(void)
         }
         serial[8] = '\0';
         info_string(serial);
-    } else if ((info_id == DAP_INFO_FW_VERSION) ||
-               (info_id == DAP_INFO_PRODUCT_FW_VERSION)) {
+    } else if (info_id == DAP_INFO_FW_VERSION) {
+        info_string(CMSIS_DAP_PROTOCOL_VERSION);
+    } else if (info_id == DAP_INFO_PRODUCT_FW_VERSION) {
         info_string(FIRMWARE_VERSION_STRING);
     } else if (info_id == DAP_INFO_CAPABILITIES) {
         s_response[1] = 2U;
@@ -231,7 +237,7 @@ static void command_info(void)
         response_finish(4U);
     } else if (info_id == DAP_INFO_PACKET_COUNT) {
         s_response[1] = 1U;
-        s_response[2] = 1U;
+        s_response[2] = CMSIS_DAP_PACKET_COUNT;
         response_finish(3U);
     } else if (info_id == DAP_INFO_PACKET_SIZE) {
         s_response[1] = 2U;
@@ -333,6 +339,8 @@ static bool transfer_parse(void)
     uint8_t index;
     uint8_t read_count = 0U;
 
+    /* 先解析可变长度的 DAP_Transfer，再提交 SWD 工作；限制读数据数量，
+     * 确保响应仍能放入一个 USB 包。 */
     if (s_request_length < 3U) {
         return false;
     }
@@ -388,6 +396,8 @@ static bool transfer_block_parse(void)
     uint8_t input_offset = 5U;
     uint8_t index;
 
+    /* DAP_TransferBlock 复用一个请求头并在其后排列写数据；读块最多 15
+     * 次，以保证响应包不会溢出。 */
     if (s_request_length < 5U) {
         return false;
     }
@@ -428,8 +438,8 @@ static bool transfer_chunk_submit(void)
     uint8_t remaining =
         (uint8_t)(s_transfer_count - s_transfer_done);
 
-    s_chunk_count = remaining > SWD_TUNNEL_MAX_TRANSFERS
-                        ? SWD_TUNNEL_MAX_TRANSFERS
+    s_chunk_count = remaining > CMSIS_DAP_TUNNEL_CHUNK_MAX
+                        ? CMSIS_DAP_TUNNEL_CHUNK_MAX
                         : remaining;
     if (!serial_bridge_swd_transfers(
             ++s_transaction_id, &s_transfers[s_transfer_done],
@@ -798,6 +808,8 @@ void cmsis_dap_process(void)
 {
     swd_tunnel_response_t result;
 
+    /* 这是命令核心的异步部分。USB 回调只提交或复制数据，桥接响应和超时
+     * 处理全部在主循环完成。 */
     if ((s_state == DAP_STATE_IDLE) || s_response_ready) {
         s_abort_requested = false;
         return;
@@ -812,6 +824,8 @@ void cmsis_dap_process(void)
         }
     }
     if (s_cancel_waiting) {
+        /* Abort 采用协作式完成：保持原响应格式，在桥接取消完成或超时后
+         * 报告传输错误。 */
         if (!serial_bridge_swd_cancel_complete(s_transaction_id) &&
             ((int32_t)(board_millis() - s_deadline) < 0)) {
             return;
@@ -828,6 +842,7 @@ void cmsis_dap_process(void)
         return;
     }
     if (serial_bridge_swd_response_take(&result)) {
+        /* 事务 ID 用于丢弃已取消操作的迟到无线或 UART 响应。 */
         if (result.transaction_id != s_transaction_id) {
             return;
         }
@@ -916,6 +931,8 @@ void cmsis_dap_process(void)
         return;
     }
     if ((int32_t)(board_millis() - s_deadline) >= 0) {
+        /* 超时终止当前命令。先取消桥接操作，再生成该命令对应的
+         * CMSIS-DAP 错误响应。 */
         serial_bridge_swd_cancel(s_transaction_id);
         if (s_state == DAP_STATE_CONNECT) {
             s_connected = false;

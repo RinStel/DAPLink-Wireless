@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "board.h"
 #include "cdc_acm_core.h"
 #include "cdc_request_validation.h"
 #include "cmsis_dap_usb.h"
@@ -11,14 +12,45 @@
 #include "usbd_enum.h"
 #include "usbd_msc_core.h"
 
+/* 按主机方式解析描述符：接口、端点和 OS 元数据必须保持一致。 */
 #define MS_OS_VENDOR_CODE     0x20U
 #define MS_OS_COMPAT_ID_INDEX 0x0004U
+#define MS_OS_EXT_PROP_INDEX  0x0005U
 #define MS_OS_STRING_INDEX    0xEEU
 
 usb_class msc_class;
 usb_class cdc_class;
 usb_class cmsis_dap_usb_class;
+static unsigned int s_board_delay_calls;
+static unsigned int s_board_led_calls;
+static unsigned int s_class_init_calls;
 static unsigned int s_standard_request_calls;
+
+uint32_t board_device_id_hash(void)
+{
+    return 0x12345678U;
+}
+
+void board_delay_ms(uint32_t delay_ms)
+{
+    (void)delay_ms;
+    ++s_board_delay_calls;
+}
+
+void board_led_set(board_led_t led, bool on)
+{
+    (void)led;
+    (void)on;
+    ++s_board_led_calls;
+}
+
+static uint8_t class_init_ok(usb_dev *udev, uint8_t config_index)
+{
+    (void)udev;
+    (void)config_index;
+    ++s_class_init_calls;
+    return USBD_OK;
+}
 
 usb_reqsta gd32_usbd_standard_request_unchecked(
     usb_dev *udev, usb_req *request)
@@ -38,6 +70,8 @@ int main(void)
 {
     const uint8_t *device = composite_desc.dev_desc;
     const uint8_t *config = composite_desc.config_desc;
+    const uint8_t *manufacturer = composite_desc.strings[STR_IDX_MFC];
+    const uint8_t *product = composite_desc.strings[STR_IDX_PRODUCT];
     uint16_t total_length = decode_u16_le(&config[2]);
     uint16_t offset = 0U;
     uint8_t interface_count = 0U;
@@ -45,12 +79,22 @@ int main(void)
     uint8_t dap_endpoint_count = 0U;
     bool dap_out_found = false;
     bool dap_in_found = false;
+    bool msc_size_valid = false;
+    bool cdc_size_valid = false;
     usb_dev udev = {0};
     usb_req request = {
         .bmRequestType = USB_TRX_IN | USB_REQTYPE_VENDOR |
                          USB_RECPTYPE_DEV,
         .bRequest = MS_OS_VENDOR_CODE,
         .wIndex = MS_OS_COMPAT_ID_INDEX,
+        .wLength = 0xFFFFU
+    };
+    usb_req property_request = {
+        .bmRequestType = USB_TRX_IN | USB_REQTYPE_VENDOR |
+                         USB_RECPTYPE_ITF,
+        .bRequest = MS_OS_VENDOR_CODE,
+        .wValue = DAP_V2_INTERFACE,
+        .wIndex = MS_OS_EXT_PROP_INDEX,
         .wLength = 0xFFFFU
     };
     usb_req line_request = {
@@ -63,7 +107,33 @@ int main(void)
         .bRequest = USB_GET_STATUS
     };
 
+    msc_class.init = class_init_ok;
+    cdc_class.init = class_init_ok;
+    cmsis_dap_usb_class.init = class_init_ok;
+    assert(composite_class.init(&udev, 0U) == USBD_OK);
+    assert(s_class_init_calls == 3U);
+    assert(s_board_delay_calls == 0U);
+    assert(s_board_led_calls == 0U);
+
     usb_composite_prepare();
+    assert(manufacturer[0] == USB_STRING_LEN(7U));
+    assert(manufacturer[2] == 'R');
+    assert(manufacturer[4] == 'i');
+    assert(manufacturer[6] == 'n');
+    assert(manufacturer[8] == 'S');
+    assert(manufacturer[10] == 't');
+    assert(manufacturer[12] == 'e');
+    assert(manufacturer[14] == 'l');
+    assert(product[0] == USB_STRING_LEN(9U));
+    assert(product[2] == 'C');
+    assert(product[4] == 'M');
+    assert(product[6] == 'S');
+    assert(product[8] == 'I');
+    assert(product[10] == 'S');
+    assert(product[12] == '-');
+    assert(product[14] == 'D');
+    assert(product[16] == 'A');
+    assert(product[18] == 'P');
     assert(cdc_set_line_coding_request_valid(&line_request));
     line_request.wLength = 8U;
     assert(!cdc_set_line_coding_request_valid(&line_request));
@@ -111,6 +181,10 @@ int main(void)
     assert(s_standard_request_calls == 1U);
 
     assert(EP_COUNT == 6U);
+    assert(USBD_EP0_MAX_SIZE == 32U);
+    assert(MSC_DATA_PACKET_SIZE == 64U);
+    assert(CDC_ACM_DATA_PACKET_SIZE == 64U);
+    assert(DAP_USB_PACKET_SIZE == 64U);
     assert(EP0_TX_ADDR >= EP_COUNT * 8U);
     assert(EP0_RX_ADDR >= EP0_TX_ADDR + USBD_EP0_MAX_SIZE);
     assert(BULK_TX_ADDR >= EP0_RX_ADDR + USBD_EP0_MAX_SIZE);
@@ -123,6 +197,7 @@ int main(void)
     assert(DAP_V2_TX_ADDR >=
            CDC_INT_TX_ADDR + CDC_ACM_CMD_PACKET_SIZE);
     assert(DAP_V2_RX_ADDR >= DAP_V2_TX_ADDR + DAP_USB_PACKET_SIZE);
+    assert(DAP_V2_RX_ADDR + DAP_USB_PACKET_SIZE == 0x01F8U);
     assert(DAP_V2_RX_ADDR + DAP_USB_PACKET_SIZE <= 512U);
     assert(EP_ID(MSC_IN_EP) < EP_COUNT);
     assert(EP_ID(MSC_OUT_EP) < EP_COUNT);
@@ -134,6 +209,7 @@ int main(void)
 
     assert(device[0] == sizeof(usb_desc_dev));
     assert(device[1] == USB_DESCTYPE_DEV);
+    assert(device[7] == 32U);
     assert(decode_u16_le(&device[8]) == 0x28E9U);
     assert(decode_u16_le(&device[10]) == 0x1290U);
     assert(decode_u16_le(&device[12]) == FIRMWARE_USB_BCD_DEVICE);
@@ -169,6 +245,16 @@ int main(void)
             dap_out_found |= endpoint == DAP_V2_OUT_EP;
             dap_in_found |= endpoint == DAP_V2_IN_EP;
             ++dap_endpoint_count;
+        } else if ((descriptor_type == USB_DESCTYPE_EP) &&
+                   (current_interface == USBD_MSC_INTERFACE)) {
+            assert(decode_u16_le(&config[offset + 4U]) ==
+                   MSC_DATA_PACKET_SIZE);
+            msc_size_valid = true;
+        } else if ((descriptor_type == USB_DESCTYPE_EP) &&
+                   (current_interface == CDC_DATA_INTERFACE)) {
+            assert(decode_u16_le(&config[offset + 4U]) ==
+                   CDC_ACM_DATA_PACKET_SIZE);
+            cdc_size_valid = true;
         }
         offset = (uint16_t)(offset + descriptor_length);
     }
@@ -176,6 +262,8 @@ int main(void)
     assert(interface_count == 4U);
     assert(dap_endpoint_count == 2U);
     assert(dap_out_found && dap_in_found);
+    assert(msc_size_valid);
+    assert(cdc_size_valid);
 
     assert(composite_desc.strings[STR_IDX_CONFIG][0] ==
            USB_STRING_LEN(12U));
@@ -190,6 +278,22 @@ int main(void)
     assert(udev.transc_in[0].xfer_len == 40U);
     assert(udev.transc_in[0].xfer_buf[16] == DAP_V2_INTERFACE);
     assert(memcmp(&udev.transc_in[0].xfer_buf[18], "WINUSB", 6U) == 0);
+
+    assert(usbd_vendor_request(&udev, &property_request) == REQ_SUPP);
+    assert(udev.transc_in[0].xfer_len == 146U);
+    assert(udev.transc_in[0].xfer_buf[0] == 146U);
+    assert(udev.transc_in[0].xfer_buf[6] == MS_OS_EXT_PROP_INDEX);
+    assert(udev.transc_in[0].xfer_buf[8] == 1U);
+    assert(udev.transc_in[0].xfer_buf[14] == 7U);
+    assert(udev.transc_in[0].xfer_buf[18] == 42U);
+    assert(udev.transc_in[0].xfer_buf[20] == 'D');
+    assert(udev.transc_in[0].xfer_buf[22] == 'e');
+    assert(udev.transc_in[0].xfer_buf[62] == 80U);
+    assert(udev.transc_in[0].xfer_buf[66] == '{');
+    assert(udev.transc_in[0].xfer_buf[68] == '7');
+    assert(udev.transc_in[0].xfer_buf[140] == '}');
+    assert(udev.transc_in[0].xfer_buf[142] == 0U);
+    assert(udev.transc_in[0].xfer_buf[144] == 0U);
 
     request.bmRequestType = USB_REQTYPE_VENDOR | USB_RECPTYPE_DEV;
     assert(usbd_vendor_request(&udev, &request) == REQ_NOTSUPP);

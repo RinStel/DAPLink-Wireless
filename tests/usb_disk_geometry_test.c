@@ -3,6 +3,7 @@
 
 #include "usb_disk_geometry.h"
 
+/* 边界测试确保磁盘访问前拒绝未对齐和溢出范围。 */
 #define TEST_DISK_SIZE   (32U * 512U)
 #define TEST_BLOCK_SIZE  512U
 

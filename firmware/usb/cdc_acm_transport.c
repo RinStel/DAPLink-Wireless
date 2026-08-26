@@ -24,25 +24,38 @@
 #include "usbd_conf.h"
 #include "usbd_transc.h"
 
-#define CDC_BUFFER_SIZE 64U
+/* USB 回调拥有端点缓冲区；主循环可以把多个业务写入排队，但一次只提交一个
+ * 64 字节 USB IN 包。 */
+#define CDC_BUFFER_SIZE      64U
+#define CDC_TX_QUEUE_SIZE    512U
+#define CDC_RX_QUEUE_SIZE    512U
 
 typedef struct {
     usb_dev *device;
     uint8_t rx_buffer[CDC_BUFFER_SIZE];
-    uint8_t tx_buffer[CDC_BUFFER_SIZE];
-    volatile uint16_t rx_length;
-    volatile uint16_t rx_offset;
+    uint8_t rx_queue[CDC_RX_QUEUE_SIZE];
+    uint8_t tx_packet[CDC_BUFFER_SIZE];
+    uint8_t tx_queue[CDC_TX_QUEUE_SIZE];
+    volatile uint16_t rx_head;
+    volatile uint16_t rx_tail;
     acm_line line_coding;
     volatile bool line_coding_changed;
     volatile bool line_coding_pending;
+    volatile bool rx_armed;
     volatile bool tx_busy;
-    volatile bool tx_zlp_pending;
+    volatile uint16_t tx_head;
+    volatile uint16_t tx_tail;
+    volatile uint16_t tx_packet_length;
 } cdc_transport_t;
 
 _Static_assert(CDC_ACM_DATA_PACKET_SIZE <= CDC_BUFFER_SIZE,
                "CDC RX packet exceeds transport buffer");
 _Static_assert(CDC_BUFFER_SIZE <= UINT16_MAX,
                "CDC buffer length does not fit USB API");
+_Static_assert(CDC_TX_QUEUE_SIZE <= UINT16_MAX,
+               "CDC TX queue length does not fit USB API");
+_Static_assert(CDC_RX_QUEUE_SIZE <= UINT16_MAX,
+               "CDC RX queue length does not fit USB API");
 
 static cdc_transport_t s_transport;
 
@@ -52,6 +65,57 @@ static uint8_t cdc_request(usb_dev *udev, usb_req *req);
 static uint8_t cdc_control_out(usb_dev *udev);
 static void cdc_data_in(usb_dev *udev, uint8_t ep_num);
 static void cdc_data_out(usb_dev *udev, uint8_t ep_num);
+static void tx_start(void);
+
+static uint16_t tx_free_unchecked(void)
+{
+    uint16_t used = (uint16_t)(s_transport.tx_tail -
+                               s_transport.tx_head);
+
+    return (uint16_t)(CDC_TX_QUEUE_SIZE - used);
+}
+
+static void tx_queue_consume(uint16_t length)
+{
+    s_transport.tx_head =
+        (uint16_t)(s_transport.tx_head + length);
+}
+
+static void tx_packet_prepare(void)
+{
+    uint16_t length;
+    uint16_t first;
+
+    length = USB_MIN((uint16_t)(s_transport.tx_tail -
+                                s_transport.tx_head),
+                     CDC_BUFFER_SIZE);
+    first = USB_MIN(length,
+                    (uint16_t)(CDC_TX_QUEUE_SIZE -
+                               (s_transport.tx_head %
+                                CDC_TX_QUEUE_SIZE)));
+    memcpy(s_transport.tx_packet,
+           &s_transport.tx_queue[s_transport.tx_head %
+                                 CDC_TX_QUEUE_SIZE], first);
+    if (first < length) {
+        memcpy(&s_transport.tx_packet[first], s_transport.tx_queue,
+               (size_t)(length - first));
+    }
+    s_transport.tx_packet_length = length;
+}
+
+static void tx_start(void)
+{
+    if ((s_transport.device == NULL) || s_transport.tx_busy) {
+        return;
+    }
+    if (s_transport.tx_head == s_transport.tx_tail) {
+        return;
+    }
+    tx_packet_prepare();
+    s_transport.tx_busy = true;
+    usbd_ep_send(s_transport.device, CDC_IN_EP,
+                 s_transport.tx_packet, s_transport.tx_packet_length);
+}
 
 static const usb_desc_ep s_in_desc = {
     .header = {sizeof(usb_desc_ep), USB_DESCTYPE_EP},
@@ -90,10 +154,13 @@ usb_class cdc_class = {
 
 static void arm_receive(void)
 {
-    if ((s_transport.device != NULL) &&
-        (s_transport.rx_offset == s_transport.rx_length)) {
-        s_transport.rx_offset = 0U;
-        s_transport.rx_length = 0U;
+    /* 回调先把 OUT 包复制到软件环形缓冲，再立即重新接收。缓冲剩余空间不足
+     * 一个最大包时使用 USB NAK 形成背压。 */
+    if ((s_transport.device != NULL) && !s_transport.rx_armed &&
+        ((CDC_RX_QUEUE_SIZE -
+          (uint16_t)(s_transport.rx_tail - s_transport.rx_head)) >=
+         CDC_ACM_DATA_PACKET_SIZE)) {
+        s_transport.rx_armed = true;
         usbd_ep_recev(s_transport.device, CDC_OUT_EP,
                       s_transport.rx_buffer,
                       CDC_ACM_DATA_PACKET_SIZE);
@@ -177,68 +244,115 @@ static uint8_t cdc_control_out(usb_dev *udev)
 
 static void cdc_data_in(usb_dev *udev, uint8_t ep_num)
 {
+    (void)udev;
     if (ep_num != EP_ID(CDC_IN_EP)) {
         return;
     }
-    if (s_transport.tx_zlp_pending) {
-        s_transport.tx_zlp_pending = false;
-        usbd_ep_send(udev, CDC_IN_EP, NULL, 0U);
-    } else {
+    if (s_transport.tx_packet_length == 0U) {
         s_transport.tx_busy = false;
+        return;
     }
+    tx_queue_consume(s_transport.tx_packet_length);
+    s_transport.tx_packet_length = 0U;
+    s_transport.tx_busy = false;
+    tx_start();
 }
 
 static void cdc_data_out(usb_dev *udev, uint8_t ep_num)
 {
+    uint16_t length;
+    uint16_t first;
+
     if (ep_num != EP_ID(CDC_OUT_EP)) {
         return;
     }
-    s_transport.rx_offset = 0U;
-    s_transport.rx_length =
-        (uint16_t)udev->transc_out[ep_num].xfer_count;
-    if (s_transport.rx_length == 0U) {
-        arm_receive();
+    s_transport.rx_armed = false;
+    length = (uint16_t)udev->transc_out[ep_num].xfer_count;
+    if (length >
+        (CDC_RX_QUEUE_SIZE -
+         (uint16_t)(s_transport.rx_tail - s_transport.rx_head))) {
+        return;
     }
+    first = USB_MIN(length,
+                    (uint16_t)(CDC_RX_QUEUE_SIZE -
+                               (s_transport.rx_tail %
+                                CDC_RX_QUEUE_SIZE)));
+    memcpy(&s_transport.rx_queue[s_transport.rx_tail %
+                                 CDC_RX_QUEUE_SIZE],
+           s_transport.rx_buffer, first);
+    if (first < length) {
+        memcpy(s_transport.rx_queue, &s_transport.rx_buffer[first],
+               (size_t)(length - first));
+    }
+    s_transport.rx_tail =
+        (uint16_t)(s_transport.rx_tail + length);
+    arm_receive();
 }
 
 uint16_t cdc_acm_read(uint8_t *data, uint16_t capacity)
 {
-    uint16_t available;
     uint16_t length;
+    uint16_t first;
 
     if ((data == NULL) || (capacity == 0U) ||
-        (s_transport.rx_offset >= s_transport.rx_length)) {
+        (s_transport.rx_head == s_transport.rx_tail)) {
         return 0U;
     }
-    available = (uint16_t)(s_transport.rx_length -
-                           s_transport.rx_offset);
-    length = USB_MIN(available, capacity);
-    memcpy(data, &s_transport.rx_buffer[s_transport.rx_offset], length);
-    s_transport.rx_offset = (uint16_t)(s_transport.rx_offset + length);
+    length = USB_MIN((uint16_t)(s_transport.rx_tail -
+                                s_transport.rx_head), capacity);
+    first = USB_MIN(length,
+                    (uint16_t)(CDC_RX_QUEUE_SIZE -
+                               (s_transport.rx_head %
+                                CDC_RX_QUEUE_SIZE)));
+    memcpy(data, &s_transport.rx_queue[s_transport.rx_head %
+                                       CDC_RX_QUEUE_SIZE], first);
+    if (first < length) {
+        memcpy(&data[first], s_transport.rx_queue,
+               (size_t)(length - first));
+    }
+    s_transport.rx_head =
+        (uint16_t)(s_transport.rx_head + length);
     arm_receive();
     return length;
 }
 
 uint16_t cdc_acm_write(const uint8_t *data, uint16_t length)
 {
+    uint16_t first;
+
     if ((data == NULL) || (length == 0U) ||
-        (length > sizeof(s_transport.tx_buffer)) ||
-        !cdc_acm_tx_ready()) {
+        (length > tx_free_unchecked()) ||
+        (s_transport.device == NULL)) {
         return 0U;
     }
 
-    memcpy(s_transport.tx_buffer, data, length);
-    s_transport.tx_busy = true;
-    s_transport.tx_zlp_pending =
-        (length % CDC_ACM_DATA_PACKET_SIZE) == 0U;
-    usbd_ep_send(s_transport.device, CDC_IN_EP,
-                 s_transport.tx_buffer, length);
+    first = USB_MIN(length,
+                    (uint16_t)(CDC_TX_QUEUE_SIZE -
+                               (s_transport.tx_tail %
+                                CDC_TX_QUEUE_SIZE)));
+    memcpy(&s_transport.tx_queue[s_transport.tx_tail %
+                                 CDC_TX_QUEUE_SIZE], data, first);
+    if (first < length) {
+        memcpy(s_transport.tx_queue, &data[first],
+               (size_t)(length - first));
+    }
+    s_transport.tx_tail =
+        (uint16_t)(s_transport.tx_tail + length);
+    tx_start();
     return length;
+}
+
+uint16_t cdc_acm_tx_free(void)
+{
+    if (s_transport.device == NULL) {
+        return 0U;
+    }
+    return tx_free_unchecked();
 }
 
 bool cdc_acm_tx_ready(void)
 {
-    return (s_transport.device != NULL) && !s_transport.tx_busy;
+    return cdc_acm_tx_free() != 0U;
 }
 
 bool cdc_acm_line_coding_take(acm_line *line)

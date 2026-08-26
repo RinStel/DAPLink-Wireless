@@ -27,15 +27,24 @@
 
 #define NO_CMD             0xFFU
 #define DAP_TRANSFER_ABORT 0x07U
+/* 在对外公布的四包窗口之外保留一个内部请求槽，使普通请求排队时仍能接收
+ * DAP_TransferAbort。 */
+#define DAP_USB_RING_SIZE  (DAP_USB_PACKET_COUNT + 2U)
 
 typedef struct {
-    uint8_t request[DAP_USB_PACKET_SIZE];
-    uint8_t abort_request[DAP_USB_PACKET_SIZE];
-    uint8_t response[DAP_USB_PACKET_SIZE];
-    volatile uint8_t request_length;
-    volatile bool request_pending;
+    uint8_t data[DAP_USB_PACKET_SIZE];
+    uint8_t length;
+} dap_usb_packet_t;
+
+typedef struct {
+    dap_usb_packet_t requests[DAP_USB_RING_SIZE];
+    dap_usb_packet_t responses[DAP_USB_RING_SIZE];
+    volatile uint8_t request_read;
+    volatile uint8_t request_write;
+    volatile uint8_t response_read;
+    volatile uint8_t response_write;
+    volatile bool out_armed;
     volatile bool tx_busy;
-    volatile bool abort_receive_active;
 } dap_usb_transport_t;
 
 static usb_dev *s_usb_device;
@@ -74,11 +83,66 @@ static const usb_desc_ep s_out_desc = {
     .bInterval = 0U
 };
 
-static void receive_arm(uint8_t *buffer, bool abort_receive)
+static uint8_t ring_next(uint8_t index)
 {
-    s_transport.abort_receive_active = abort_receive;
+    /* 保留一个空槽，以便用读写索引区分满和空。 */
+    ++index;
+    return index == DAP_USB_RING_SIZE ? 0U : index;
+}
+
+static bool request_available(void)
+{
+    return s_transport.request_read != s_transport.request_write;
+}
+
+static bool request_full(void)
+{
+    return ring_next(s_transport.request_write) ==
+           s_transport.request_read;
+}
+
+static bool response_available(void)
+{
+    return s_transport.response_read != s_transport.response_write;
+}
+
+static bool response_full(void)
+{
+    return ring_next(s_transport.response_write) ==
+           s_transport.response_read;
+}
+
+static void receive_arm(uint8_t *buffer)
+{
+    s_transport.out_armed = true;
     usbd_ep_recev(s_usb_device, DAP_V2_OUT_EP, buffer,
                   DAP_USB_PACKET_SIZE);
+}
+
+static void receive_arm_if_space(void)
+{
+    /* 只有前一个包已消费或提交到请求环后才重新 arm OUT，避免 DMA 覆盖排队
+     * 数据。 */
+    if ((s_usb_device != NULL) && !s_transport.out_armed &&
+        !request_full()) {
+        receive_arm(
+            s_transport.requests[s_transport.request_write].data);
+    }
+}
+
+static void send_response_if_ready(void)
+{
+    dap_usb_packet_t *packet;
+
+    if ((s_usb_device == NULL) || s_transport.tx_busy ||
+        !response_available()) {
+        return;
+    }
+    /* USB IN 串行发送，但主机确认上一个包时仍可继续把响应写入 FIFO。 */
+    packet = &s_transport.responses[s_transport.response_read];
+    s_transport.tx_busy = true;
+    usbd_ep_send(s_usb_device, DAP_V2_IN_EP, packet->data,
+                 packet->length);
 }
 
 static uint8_t dap_usb_init(usb_dev *udev, uint8_t config_index)
@@ -95,7 +159,7 @@ static uint8_t dap_usb_init(usb_dev *udev, uint8_t config_index)
     memset(&s_transport, 0, sizeof(s_transport));
     s_usb_device = udev;
     cmsis_dap_init();
-    receive_arm(s_transport.request, false);
+    receive_arm_if_space();
     return USBD_OK;
 }
 
@@ -104,6 +168,7 @@ static uint8_t dap_usb_deinit(usb_dev *udev, uint8_t config_index)
     (void)config_index;
     usbd_ep_deinit(udev, DAP_V2_IN_EP);
     usbd_ep_deinit(udev, DAP_V2_OUT_EP);
+    memset(&s_transport, 0, sizeof(s_transport));
     s_usb_device = NULL;
     return USBD_OK;
 }
@@ -122,8 +187,12 @@ static void dap_usb_data_in(usb_dev *udev, uint8_t ep_num)
     if (ep_num != EP_ID(DAP_V2_IN_EP)) {
         return;
     }
+    if (response_available()) {
+        s_transport.response_read = ring_next(s_transport.response_read);
+    }
     s_transport.tx_busy = false;
-    receive_arm(s_transport.request, false);
+    receive_arm_if_space();
+    send_response_if_ready();
 }
 
 static void dap_usb_data_out(usb_dev *udev, uint8_t ep_num)
@@ -134,54 +203,58 @@ static void dap_usb_data_out(usb_dev *udev, uint8_t ep_num)
         return;
     }
     length = (uint8_t)udev->transc_out[ep_num].xfer_count;
-
-    if (s_transport.abort_receive_active) {
-        if ((length != 0U) &&
-            (s_transport.abort_request[0] == DAP_TRANSFER_ABORT)) {
-            cmsis_dap_abort();
-        }
-        return;
-    }
-    if ((length != 0U) &&
-        (s_transport.request[0] == DAP_TRANSFER_ABORT)) {
-        cmsis_dap_abort();
-        receive_arm(s_transport.request, false);
-        return;
-    }
+    s_transport.out_armed = false;
     if (length == 0U) {
-        receive_arm(s_transport.request, false);
+        receive_arm_if_space();
         return;
     }
-    s_transport.request_length = length;
-    s_transport.request_pending = true;
-    receive_arm(s_transport.abort_request, true);
+    if (s_transport.requests[s_transport.request_write].data[0] ==
+        DAP_TRANSFER_ABORT) {
+        cmsis_dap_abort();
+        receive_arm_if_space();
+        return;
+    }
+    if (request_full()) {
+        receive_arm_if_space();
+        return;
+    }
+    s_transport.requests[s_transport.request_write].length = length;
+    s_transport.request_write = ring_next(s_transport.request_write);
+    receive_arm_if_space();
 }
 
 void cmsis_dap_usb_process(void)
 {
+    dap_usb_packet_t *request;
+    dap_usb_packet_t *response;
     uint8_t length;
 
     if (s_usb_device == NULL) {
         return;
     }
-    if (s_transport.request_pending &&
-        cmsis_dap_submit(s_transport.request,
-                         s_transport.request_length)) {
-        s_transport.request_pending = false;
+    if (!cmsis_dap_busy() && request_available()) {
+        request = &s_transport.requests[s_transport.request_read];
+        if (cmsis_dap_submit(request->data, request->length)) {
+            s_transport.request_read =
+                ring_next(s_transport.request_read);
+            receive_arm_if_space();
+        }
     }
     cmsis_dap_process();
-    if (s_transport.tx_busy ||
-        !cmsis_dap_response_take(s_transport.response, &length)) {
-        return;
+    if (!response_full()) {
+        response = &s_transport.responses[s_transport.response_write];
+        if (cmsis_dap_response_take(response->data, &length)) {
+            response->length = length;
+            s_transport.response_write =
+                ring_next(s_transport.response_write);
+        }
     }
-    s_transport.tx_busy = true;
-    usbd_ep_send(s_usb_device, DAP_V2_IN_EP, s_transport.response,
-                 length);
+    send_response_if_ready();
 }
 
 bool cmsis_dap_usb_idle(void)
 {
-    return !s_transport.request_pending &&
+    return !request_available() && !response_available() &&
            !s_transport.tx_busy &&
            !cmsis_dap_busy();
 }

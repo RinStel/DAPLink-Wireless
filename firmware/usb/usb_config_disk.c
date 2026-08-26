@@ -36,6 +36,8 @@
 #include "usbd_msc_core.h"
 #include "usbd_msc_mem.h"
 
+/* MSC 卷是 RAM-backed FAT12 磁盘。USB 写入带版本号，主循环不会在 MSC 回调
+ * 修改扇区时解析该扇区。 */
 #define DISK_BLOCK_SIZE          512U
 #define DISK_BLOCK_COUNT         32U
 #define DISK_SIZE                (DISK_BLOCK_SIZE * DISK_BLOCK_COUNT)
@@ -115,6 +117,7 @@ static void encode_u32_le(uint8_t *output, uint32_t value)
 
 static void fat12_set(uint16_t cluster, uint16_t value)
 {
+    /* FAT12 将每个 12 位项交错存放在两个字节的半字节中。 */
     uint8_t *fat = &s_disk[DISK_FAT_SECTOR * DISK_BLOCK_SIZE];
     uint16_t offset = (uint16_t)(cluster + cluster / 2U);
 
@@ -268,6 +271,8 @@ static void disk_format(void)
     uint32_t config_length;
     uint32_t status_length;
 
+    /* 每次应用配置后重建所有扇区，使主机重新枚举后看到一致的
+     * CONFIG.TXT/STATUS.TXT 快照。 */
     memset(s_disk, 0, sizeof(s_disk));
     boot[0] = 0xEBU;
     boot[1] = 0x3CU;
@@ -397,6 +402,7 @@ static bool config_parse(char *text)
     bool mode_found = false;
     bool profile_found = false;
 
+    /* 在修改活动配置前先解析完整文件。未知键可忽略，但必需键及其值必须严格。 */
     while (line != NULL) {
         trim_line(line);
         if (strncmp(line, "SYNC=", 5U) == 0) {
@@ -452,6 +458,7 @@ static bool config_file_extract(char output[CONFIG_BUFFER_SIZE])
     const uint8_t *root = &s_disk[DISK_ROOT_SECTOR * DISK_BLOCK_SIZE];
     uint8_t entry;
 
+    /* 只跟随 CONFIG.TXT 的簇链；复制到固定大小的解析缓冲区前拒绝越界扇区。 */
     for (entry = 0U; entry < 16U; ++entry) {
         const uint8_t *item = &root[(uint32_t)entry * 32U];
         uint16_t cluster;
@@ -561,13 +568,23 @@ bool usb_config_disk_init(void)
     s_last_apply_ok = true;
     s_apply_result = CONFIG_APPLY_OK;
 
-    board_usb_connect(false);
     rcu_usb_clock_config(RCU_CKUSB_CKPLL_DIV2_5);
     rcu_periph_clock_enable(RCU_USBD);
     usb_irqs_enable(true);
     usb_composite_prepare();
+
     usbd_init(&s_usb_device, &composite_desc, &composite_class);
+
+    /* CRITICAL: Enable hardware pullup AFTER usbd_init but BEFORE usbd_connect */
+    /* Give USB controller time to initialize before connecting to host */
+    board_delay_ms(10U);
+    board_usb_connect(true);
+    board_delay_ms(10U);
+
+    /* Note: usbd_connect() may try to control internal pullup, but this hardware
+     * uses external GPIO (PA8) pullup which we already enabled above */
     usbd_connect(&s_usb_device);
+
     return true;
 }
 
@@ -578,6 +595,8 @@ void usb_config_disk_process(void)
     uint32_t version_after;
     uint32_t idle_ms;
 
+    /* USB DAP 流量优先。配置变更必须等待 MSC 和 CMSIS-DAP 都空闲后才断开
+     * 复合设备。 */
     cmsis_dap_usb_process();
 
     if (s_refresh_requested) {
@@ -619,6 +638,8 @@ void usb_config_disk_process(void)
         return;
     }
 
+    /* 奇数版本表示 MSC 正在写入；DMB 与写端屏障配对，第二次读取用于检测
+     * 并发更新。 */
     version_before = s_disk_write_version;
     __DMB();
     if ((version_before & 1U) != 0U ||
@@ -637,6 +658,13 @@ void usb_config_disk_process(void)
         s_last_apply_ok = false;
         s_apply_result = CONFIG_APPLY_INVALID;
         disk_rebuild_and_reconnect();
+        return;
+    }
+
+    if (device_config_equal(&previous, device_config_get())) {
+        s_disk_dirty = false;
+        s_last_apply_ok = true;
+        s_apply_result = CONFIG_APPLY_OK;
         return;
     }
 

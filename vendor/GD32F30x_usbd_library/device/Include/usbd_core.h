@@ -45,7 +45,9 @@ OF SUCH DAMAGE.
 #define EP_ID(x)              ((uint8_t)((x) & 0x7FU))
 
 /* USB device endpoint0 max packet size */
+#ifndef USBD_EP0_MAX_SIZE
 #define USBD_EP0_MAX_SIZE     64U
+#endif
 
 #define USBD_TRANSC_COUNT     3U
 
