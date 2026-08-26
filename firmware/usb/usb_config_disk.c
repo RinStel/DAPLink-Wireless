@@ -172,9 +172,9 @@ static uint32_t config_text_build(char output[CONFIG_BUFFER_SIZE])
 {
     const device_config_t *config = device_config_get();
     const char *device_mode;
-    const char *mode = config->rate_mode == DEVICE_RATE_AUTO
-                           ? "AUTO"
-                           : "FIXED";
+    const char *profile = config->rate_mode == DEVICE_RATE_AUTO
+                              ? "AUTO"
+                              : sx128x_profile_name(config->fixed_profile);
     uint32_t length = 0U;
 
     switch (config->device_mode) {
@@ -192,23 +192,18 @@ static uint32_t config_text_build(char output[CONFIG_BUFFER_SIZE])
 
     output[0] = '\0';
     if (!text_append(output, CONFIG_BUFFER_SIZE, &length,
-                     "# DAPLink-Wireless configuration\r\n"
-                     "# SYNC must contain exactly 16 letters or digits.\r\n"
-                     "# DEVICE_MODE: WIRED, WIRELESS_HOST, WIRELESS_SLAVE.\r\n"
-                     "# MODE is AUTO or FIXED. PROFILE: GFSK2M, GFSK1M,\r\n"
-                     "# GFSK500K, FLRC1M3, FLRC650K.\r\n"
+                     "# DAPLink-Wireless 配置\r\n"
+                     "# SYNC 必须正好包含 16 个字母或数字。\r\n"
+                     "# MODE：WIRED、WIRELESS_HOST、WIRELESS_SLAVE。\r\n"
+                     "# PROFILE：AUTO，或 GFSK2M、GFSK1M、GFSK500K、\r\n"
+                     "# FLRC1M3、FLRC650K。\r\n"
                      "SYNC=") ||
         !text_append(output, CONFIG_BUFFER_SIZE, &length,
                      config->sync_code) ||
-        !text_append(output, CONFIG_BUFFER_SIZE, &length,
-                     "\r\nDEVICE_MODE=") ||
-        !text_append(output, CONFIG_BUFFER_SIZE, &length, device_mode) ||
         !text_append(output, CONFIG_BUFFER_SIZE, &length, "\r\nMODE=") ||
-        !text_append(output, CONFIG_BUFFER_SIZE, &length, mode) ||
-        !text_append(output, CONFIG_BUFFER_SIZE, &length,
-                     "\r\nPROFILE=") ||
-        !text_append(output, CONFIG_BUFFER_SIZE, &length,
-                     sx128x_profile_name(config->fixed_profile)) ||
+        !text_append(output, CONFIG_BUFFER_SIZE, &length, device_mode) ||
+        !text_append(output, CONFIG_BUFFER_SIZE, &length, "\r\nPROFILE=") ||
+        !text_append(output, CONFIG_BUFFER_SIZE, &length, profile) ||
         !text_append(output, CONFIG_BUFFER_SIZE, &length, "\r\n")) {
         return 0U;
     }
@@ -266,8 +261,8 @@ static void disk_format(void)
 {
     uint8_t *boot = &s_disk[0];
     static const char readme[] =
-        "Edit CONFIG.TXT, save it, then safely eject the drive.\r\n"
-        "Invalid settings are ignored and the previous configuration remains.\r\n";
+        "请编辑 CONFIG.TXT，保存后安全弹出磁盘。\r\n"
+        "无效设置将被忽略，并继续使用之前的配置。\r\n";
     uint32_t config_length;
     uint32_t status_length;
 
@@ -391,7 +386,6 @@ static bool config_parse(char *text)
 {
     char sync_code[DEVICE_SYNC_CODE_LENGTH + 1U] = "";
     char device_mode_text[16] = "";
-    char mode_text[8] = "";
     char profile_text[12] = "";
     char *line = strtok(text, "\n");
     device_rate_mode_t mode;
@@ -399,7 +393,6 @@ static bool config_parse(char *text)
     sx128x_profile_t profile = SX128X_PROFILE_GFSK_1M;
     bool sync_found = false;
     bool device_mode_found = false;
-    bool mode_found = false;
     bool profile_found = false;
 
     /* 在修改活动配置前先解析完整文件。未知键可忽略，但必需键及其值必须严格。 */
@@ -411,21 +404,16 @@ static bool config_parse(char *text)
             }
             strncpy(sync_code, line + 5U, sizeof(sync_code) - 1U);
             sync_found = true;
-        } else if (strncmp(line, "DEVICE_MODE=", 12U) == 0) {
-            if (strlen(line + 12U) >= sizeof(device_mode_text)) {
+        } else if (strncmp(line, "MODE=", 5U) == 0) {
+            if (device_mode_found ||
+                strlen(line + 5U) >= sizeof(device_mode_text)) {
                 return false;
             }
-            strncpy(device_mode_text, line + 12U,
+            strncpy(device_mode_text, line + 5U,
                     sizeof(device_mode_text) - 1U);
             device_mode_found = true;
-        } else if (strncmp(line, "MODE=", 5U) == 0) {
-            if (strlen(line + 5U) >= sizeof(mode_text)) {
-                return false;
-            }
-            strncpy(mode_text, line + 5U, sizeof(mode_text) - 1U);
-            mode_found = true;
         } else if (strncmp(line, "PROFILE=", 8U) == 0) {
-            if (strlen(line + 8U) >= sizeof(profile_text)) {
+            if (profile_found || strlen(line + 8U) >= sizeof(profile_text)) {
                 return false;
             }
             strncpy(profile_text, line + 8U, sizeof(profile_text) - 1U);
@@ -434,20 +422,17 @@ static bool config_parse(char *text)
         line = strtok(NULL, "\n");
     }
 
-    if (!sync_found || !device_mode_found || !mode_found || !profile_found) {
+    if (!sync_found || !device_mode_found || !profile_found) {
         return false;
     }
     if (!device_mode_parse(device_mode_text, &device_mode)) {
         return false;
     }
-    if (strcmp(mode_text, "AUTO") == 0) {
+    if (strcmp(profile_text, "AUTO") == 0) {
         mode = DEVICE_RATE_AUTO;
-    } else if (strcmp(mode_text, "FIXED") == 0) {
+    } else if (profile_parse(profile_text, &profile)) {
         mode = DEVICE_RATE_FIXED;
     } else {
-        return false;
-    }
-    if (!profile_parse(profile_text, &profile)) {
         return false;
     }
     return device_config_apply(sync_code, device_mode, mode, profile);

@@ -661,7 +661,7 @@ assert decoded.images["B"].load_address == 0x08021000
 - [ ] **Step 2: 写入 updater 的纯函数和进程桩测试**
 
 ```python
-updated = set_enter_dfu("DEVICE_MODE=WIRED\r\n", True)
+updated = set_enter_dfu("MODE=WIRED\r\nPROFILE=AUTO\r\n", True)
 assert updated.endswith("ENTER_DFU=1\r\n")
 info = parse_dfu_listing(sample_dfu_util_output)
 assert info.inactive_slot == "B"
