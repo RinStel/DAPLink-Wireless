@@ -163,10 +163,6 @@ int main(void)
     uint8_t payload[SWD_TUNNEL_MAX_PAYLOAD];
     uint8_t sequence_data[SWD_TUNNEL_MAX_PAYLOAD - 4U] = {0U};
     uint8_t length;
-    swd_tunnel_transfer_t transfer = {
-        .request = 0x32U,
-        .data = 0x12345678U
-    };
     swd_tunnel_transfer_t cancel_transfer = {
         .request = 0x02U,
         .data = 0U
@@ -180,11 +176,6 @@ int main(void)
     const uint8_t raw_response[] = {
         SWD_TUNNEL_OP_SWD_SEQUENCE, 7U, 2U, 0U, 0U, 0xA5U
     };
-
-    assert(swd_tunnel_encode_transfers(3U, &transfer, 1U, payload) == 8U);
-    assert(payload[3] == 0x32U);
-    assert(payload[4] == 0x78U);
-    assert(payload[7] == 0x12U);
 
     {
         swd_tunnel_transfer_t block_transfers[3] = {
@@ -250,10 +241,8 @@ int main(void)
             {.request = 0x12U, .data = 1U}
         };
 
-        length = swd_tunnel_encode_transfers(
-            5U, match_transfers, 2U, payload);
         s_transfer_calls = 0U;
-        assert(swd_tunnel_submit(payload, length));
+        assert(swd_tunnel_submit_block(5U, match_transfers, 2U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
@@ -269,9 +258,7 @@ int main(void)
 
         s_async_waits_remaining = 2U;
         s_transfer_calls = 0U;
-        length = swd_tunnel_encode_transfers(
-            15U, &wait_transfer, 1U, payload);
-        assert(swd_tunnel_submit(payload, length));
+        assert(swd_tunnel_submit_block(15U, &wait_transfer, 1U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
@@ -290,9 +277,7 @@ int main(void)
         s_async_result_count = 2U;
         s_async_results[0] = 0U;
         s_async_results[1] = 0x14770011U;
-        length = swd_tunnel_encode_transfers(
-            16U, &ap_idr_read, 1U, payload);
-        assert(swd_tunnel_submit(payload, length));
+        assert(swd_tunnel_submit_block(16U, &ap_idr_read, 1U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
@@ -318,9 +303,7 @@ int main(void)
         s_async_results[0] = 0U;
         s_async_results[1] = 0x11111111U;
         s_async_results[2] = 0x22222222U;
-        length = swd_tunnel_encode_transfers(
-            17U, ap_reads, 2U, payload);
-        assert(swd_tunnel_submit(payload, length));
+        assert(swd_tunnel_submit_block(17U, ap_reads, 2U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
@@ -343,9 +326,7 @@ int main(void)
         s_transfer_calls = 0U;
         s_async_request_count = 0U;
         s_async_result_count = 2U;
-        length = swd_tunnel_encode_transfers(
-            18U, &final_write, 1U, payload);
-        assert(swd_tunnel_submit(payload, length));
+        assert(swd_tunnel_submit_block(18U, &final_write, 1U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
@@ -369,10 +350,14 @@ int main(void)
         s_async_results[0] = 0U;
         s_async_results[1] = 0x33333333U;
         s_async_results[2] = 0x44444444U;
+        uint8_t process_calls = 0U;
+
         assert(swd_tunnel_submit_block(19U, block_reads, 2U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
+            ++process_calls;
         }
+        assert(process_calls <= 3U);
         assert(swd_tunnel_decode_response(payload, length, &response));
         assert(s_transfer_calls == 3U);
         assert(s_async_requests[0] == 0x0FU);
@@ -420,20 +405,16 @@ int main(void)
     payload[3] = 0xFFU;
     assert(!swd_tunnel_submit(payload, 5U));
 
-    length = swd_tunnel_encode_transfers(
-        11U, &cancel_transfer, 1U, payload);
     s_transfer_calls = 0U;
-    assert(swd_tunnel_submit(payload, length));
+    assert(swd_tunnel_submit_block(11U, &cancel_transfer, 1U));
     swd_tunnel_cancel();
     swd_tunnel_process();
     assert(s_transfer_calls == 0U);
     assert(!swd_tunnel_response_take(payload, &length));
 
-    length = swd_tunnel_encode_transfers(
-        12U, &cancel_transfer, 1U, payload);
     s_cancel_during_transfer = true;
     s_abort_requested = false;
-    assert(swd_tunnel_submit(payload, length));
+    assert(swd_tunnel_submit_block(12U, &cancel_transfer, 1U));
     swd_tunnel_process();
     swd_tunnel_process();
     swd_tunnel_process();
@@ -442,9 +423,7 @@ int main(void)
     assert(!swd_tunnel_response_take(payload, &length));
 
     cancel_transfer.request = 0x22U;
-    length = swd_tunnel_encode_transfers(
-        13U, &cancel_transfer, 1U, payload);
-    assert(!swd_tunnel_submit(payload, length));
+    assert(!swd_tunnel_submit_block(13U, &cancel_transfer, 1U));
 
     {
         swd_tunnel_transfer_t budget_transfers[2] = {
@@ -455,9 +434,7 @@ int main(void)
         s_now_ms = 0U;
         s_transfer_advance_ms = 300U;
         s_transfer_calls = 0U;
-        length = swd_tunnel_encode_transfers(
-            14U, budget_transfers, 2U, payload);
-        assert(swd_tunnel_submit(payload, length));
+        assert(swd_tunnel_submit_block(14U, budget_transfers, 2U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }

@@ -188,31 +188,6 @@ static bool request_valid(const uint8_t *request, uint8_t request_length)
         return (request_length == 6U) &&
                (decode_u32_le(&request[2]) != 0U);
     }
-    if (operation == SWD_TUNNEL_OP_TRANSFER) {
-        uint8_t count;
-        uint8_t index;
-
-        if (request_length < 3U) {
-            return false;
-        }
-        count = request[2];
-        if ((count == 0U) ||
-            (count > SWD_TUNNEL_MAX_TRANSFERS) ||
-            (request_length != (uint8_t)(3U + count * 5U))) {
-            return false;
-        }
-        for (index = 0U; index < count; ++index) {
-            uint8_t transfer = request[3U + index * 5U];
-
-            if ((((transfer & SWD_TRANSFER_MATCH_MASK) != 0U) &&
-                 ((transfer & 0x02U) != 0U)) ||
-                (((transfer & SWD_TRANSFER_MATCH_VALUE) != 0U) &&
-                 ((transfer & 0x02U) == 0U))) {
-                return false;
-            }
-        }
-        return true;
-    }
     if (operation == SWD_TUNNEL_OP_SWD_SEQUENCE) {
         return (request_length >= 3U) &&
                swd_sequence_request_valid(
@@ -336,28 +311,6 @@ uint8_t swd_tunnel_encode_pins(uint8_t transaction_id,
     payload[3] = select;
     encode_u32_le(&payload[4], wait_us);
     return 8U;
-}
-
-uint8_t swd_tunnel_encode_transfers(
-    uint8_t transaction_id, const swd_tunnel_transfer_t *transfers,
-    uint8_t count, uint8_t *payload)
-{
-    uint8_t index;
-
-    if ((payload == NULL) || (transfers == NULL) || (count == 0U) ||
-        (count > SWD_TUNNEL_MAX_TRANSFERS)) {
-        return 0U;
-    }
-    payload[0] = SWD_TUNNEL_OP_TRANSFER;
-    payload[1] = transaction_id;
-    payload[2] = count;
-    for (index = 0U; index < count; ++index) {
-        uint8_t offset = (uint8_t)(3U + index * 5U);
-
-        payload[offset] = transfers[index].request & 0x3FU;
-        encode_u32_le(&payload[offset + 1U], transfers[index].data);
-    }
-    return (uint8_t)(3U + count * 5U);
 }
 
 static bool block_request_supported(uint8_t request)
@@ -510,11 +463,9 @@ static bool execute_immediate(const uint8_t *request,
 {
     uint8_t operation;
     uint8_t transaction_id;
-    uint8_t count = 0U;
     uint8_t completed = 0U;
     uint8_t raw_length = 0U;
     target_swd_ack_t ack = TARGET_SWD_ACK_OK;
-    uint32_t started_at = board_millis();
 
     if ((request == NULL) || (request_length < 2U) ||
         (response == NULL) || (response_length == NULL)) {
@@ -589,87 +540,6 @@ static bool execute_immediate(const uint8_t *request,
             return false;
         }
         target_swd_init(decode_u32_le(&request[2]));
-    } else if (operation == SWD_TUNNEL_OP_TRANSFER) {
-        uint8_t index;
-        bool check_write = false;
-
-        if (request_length < 3U) {
-            return false;
-        }
-        count = request[2];
-        if ((count == 0U) || (count > SWD_TUNNEL_MAX_TRANSFERS) ||
-            (request_length != (uint8_t)(3U + count * 5U))) {
-            return false;
-        }
-        target_swd_abort_clear();
-        for (index = 0U; index < count; ++index) {
-            uint8_t offset = (uint8_t)(3U + index * 5U);
-            uint8_t transfer_request = request[offset];
-            uint32_t data = decode_u32_le(&request[offset + 1U]);
-
-            if ((uint32_t)(board_millis() - started_at) >=
-                SWD_TUNNEL_EXECUTION_BUDGET_MS) {
-                ack = TARGET_SWD_ACK_WAIT;
-                break;
-            }
-            if ((transfer_request & SWD_TRANSFER_MATCH_MASK) != 0U) {
-                s_match_mask = data;
-                ack = TARGET_SWD_ACK_OK;
-            } else if ((transfer_request &
-                        SWD_TRANSFER_MATCH_VALUE) != 0U) {
-                uint32_t expected = data;
-                uint16_t attempts = 0U;
-
-                do {
-                    ack = target_swd_transfer(transfer_request, &data);
-                    if ((ack == TARGET_SWD_ACK_OK) &&
-                        ((transfer_request & 0x03U) == 0x03U)) {
-                        ack = target_swd_transfer(0x0EU, &data);
-                    }
-                    if (ack != TARGET_SWD_ACK_OK) {
-                        break;
-                    }
-                    ++attempts;
-                } while (((data & s_match_mask) != expected) &&
-                         (attempts <= s_match_retry) &&
-                         ((uint32_t)(board_millis() - started_at) <
-                          SWD_TUNNEL_EXECUTION_BUDGET_MS));
-                if ((ack == TARGET_SWD_ACK_OK) &&
-                    ((data & s_match_mask) != expected)) {
-                    ack = (target_swd_ack_t)(
-                        (uint8_t)ack | SWD_TRANSFER_MISMATCH);
-                }
-                check_write = false;
-            } else {
-                ack = target_swd_transfer(transfer_request, &data);
-                if ((ack == TARGET_SWD_ACK_OK) &&
-                    ((transfer_request & 0x03U) == 0x03U)) {
-                    ack = target_swd_transfer(0x0EU, &data);
-                }
-                check_write =
-                    (transfer_request & 0x02U) == 0U;
-            }
-            if (ack != TARGET_SWD_ACK_OK) {
-                break;
-            }
-            if ((transfer_request & SWD_TRANSFER_MATCH_MASK) == 0U) {
-                encode_u32_le(
-                    &response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
-                              completed * 4U],
-                    data);
-            } else {
-                encode_u32_le(
-                    &response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
-                              completed * 4U],
-                    0U);
-            }
-            ++completed;
-        }
-        if ((completed == count) && check_write) {
-            uint32_t ignored;
-
-            ack = target_swd_transfer(0x0EU, &ignored);
-        }
     } else if (operation == SWD_TUNNEL_OP_SWD_SEQUENCE) {
         if ((request_length < 3U) ||
             !swd_sequence_request_valid(&request[2],
@@ -700,7 +570,7 @@ static bool execute_immediate(const uint8_t *request,
 
 static void transfer_async_finish(target_swd_ack_t ack)
 {
-    s_response[0] = SWD_TUNNEL_OP_TRANSFER;
+    s_response[0] = SWD_TUNNEL_OP_BLOCK;
     s_response[1] = s_request[1];
     s_response[2] = s_transfer_completed;
     s_response[3] = (uint8_t)ack;
@@ -807,7 +677,8 @@ static void transfer_async_process(void)
             return;
         }
         s_transfer_poll_pending = true;
-        return;
+        /* 不在此处让出主循环。begin() 只登记请求，真正的 bit-bang 发生在
+         * poll() 里，分成两次主循环会让每个字多付一整轮主循环开销。 */
     }
     poll_result = target_swd_transfer_poll(&ack);
     if (poll_result == TARGET_SWD_POLL_BUSY) {
@@ -906,7 +777,7 @@ bool swd_tunnel_submit_block(uint8_t transaction_id,
         s_block_transfers[index].request = request;
     }
     s_block_count = count;
-    s_request[0] = SWD_TUNNEL_OP_TRANSFER;
+    s_request[0] = SWD_TUNNEL_OP_BLOCK;
     s_request[1] = transaction_id;
     s_request[2] = count;
     s_request_length = 3U;
@@ -921,7 +792,7 @@ void swd_tunnel_process(void)
     uint32_t wait_us;
     uint8_t pins;
 
-    /* 每次调用只启动或推进一个操作，限制主循环延迟，并为取消长传输留出机会。 */
+    /* 长操作按时间预算推进，限制主循环延迟，并为取消长传输留出机会。 */
     if (s_transfer_async) {
         transfer_async_process();
         return;
@@ -929,7 +800,9 @@ void swd_tunnel_process(void)
     if (s_request_ready) {
         s_request_ready = false;
         s_executing = true;
-        if (s_request[0] == SWD_TUNNEL_OP_TRANSFER) {
+        if (s_request[0] == SWD_TUNNEL_OP_BLOCK) {
+            /* 启动后立刻在同一次调用内按预算执行，避免只为初始化状态机就
+             * 白付一轮主循环调度。 */
             transfer_async_start();
             return;
         }
@@ -1044,7 +917,7 @@ bool swd_tunnel_decode_response(const uint8_t *payload, uint8_t length,
         response->raw_length = payload[2];
         return true;
     }
-    if ((payload[2] > SWD_TUNNEL_MAX_TRANSFERS) ||
+    if ((payload[2] > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) ||
         (length != (uint8_t)(SWD_TUNNEL_RESPONSE_HEADER_SIZE +
                              payload[2] * 4U))) {
         return false;

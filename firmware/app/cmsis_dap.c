@@ -855,7 +855,7 @@ void cmsis_dap_process(void)
             }
             connect_complete(&result);
         } else if (s_state == DAP_STATE_TRANSFER) {
-            if ((result.operation != SWD_TUNNEL_OP_TRANSFER) ||
+            if ((result.operation != SWD_TUNNEL_OP_BLOCK) ||
                 (result.completed > s_chunk_count) ||
                 (result.completed >
                  (uint8_t)(s_transfer_count - s_transfer_done))) {

@@ -65,7 +65,7 @@
 
 **Interfaces:**
 - Add `swd_tunnel_encode_block()` and `swd_tunnel_decode_block()` for `[transaction_id,count,request[count],write_data...]`.
-- Add `SWD_TUNNEL_MAX_BLOCK_TRANSFERS 21U` and keep the old v1 wire encoder unused after migration.
+- Add `SWD_TUNNEL_MAX_BLOCK_TRANSFERS 21U`; block encoding is the only SWD transfer path.
 - Add `serial_bridge_swd_block_request()` that emits one `RADIO_FRAME_SWD_BLOCK`.
 
 - [x] **Step 1: Add failing codec tests.**

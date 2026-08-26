@@ -75,22 +75,23 @@ void swd_bridge_service_process(void)
     }
     if (s_owner == SWD_OWNER_WIRELESS_SLAVE) {
         if (s_block_active) {
-            swd_tunnel_response_t legacy;
+            swd_tunnel_response_t block_result;
             uint32_t reads[SWD_TUNNEL_MAX_BLOCK_TRANSFERS];
             uint8_t read_count = 0U;
             uint8_t index;
 
-            if (!swd_tunnel_decode_response(payload, length, &legacy)) {
+            if (!swd_tunnel_decode_response(payload, length, &block_result)) {
                 s_owner = SWD_OWNER_NONE;
                 return;
             }
-            for (index = 0U; index < legacy.completed; ++index) {
+            for (index = 0U; index < block_result.completed; ++index) {
                 if ((s_block_transfers[index].request & 0x02U) != 0U) {
-                    reads[read_count++] = legacy.data[index];
+                    reads[read_count++] = block_result.data[index];
                 }
             }
             s_reply_length = swd_tunnel_encode_block_response(
-                legacy.transaction_id, legacy.completed, legacy.ack,
+                block_result.transaction_id, block_result.completed,
+                block_result.ack,
                 reads, read_count, s_reply);
             s_reply_block = true;
         } else {
@@ -166,7 +167,7 @@ bool swd_bridge_service_wireless_command(const uint8_t *payload,
 {
     if ((s_owner != SWD_OWNER_NONE) || s_reply_ready ||
         (payload == NULL) || (length < 2U) ||
-        (payload[0] == SWD_TUNNEL_OP_TRANSFER) ||
+        (payload[0] == SWD_TUNNEL_OP_BLOCK) ||
         !swd_tunnel_submit(payload, length)) {
         return false;
     }
@@ -182,7 +183,7 @@ bool swd_bridge_service_wireless_block_request(const uint8_t *payload,
 
     if ((s_owner != SWD_OWNER_NONE) || s_reply_ready ||
         !swd_tunnel_decode_block(payload, length, &block) ||
-        (block.count > SWD_TUNNEL_MAX_TRANSFERS)) {
+        (block.count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS)) {
         return false;
     }
     if (!swd_tunnel_submit_block(block.transaction_id, block.transfers,
@@ -236,7 +237,7 @@ bool swd_bridge_service_wireless_block_response(const uint8_t *payload,
         return true;
     }
     memset(&s_response, 0, sizeof(s_response));
-    s_response.operation = SWD_TUNNEL_OP_TRANSFER;
+    s_response.operation = SWD_TUNNEL_OP_BLOCK;
     s_response.transaction_id = block.transaction_id;
     s_response.completed = block.completed;
     s_response.ack = block.ack;

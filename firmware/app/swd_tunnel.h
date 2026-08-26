@@ -22,14 +22,13 @@
 #include <stdint.h>
 
 /* 每个 payload 都以 operation 和 transaction_id 字节开始。 */
-#define SWD_TUNNEL_MAX_TRANSFERS 21U
 #define SWD_TUNNEL_MAX_PAYLOAD   110U
 #define SWD_TUNNEL_MAX_BLOCK_TRANSFERS 21U
 #define SWD_TUNNEL_MAX_BLOCK_PAYLOAD   110U
 
 typedef enum {
     SWD_TUNNEL_OP_CONNECT = 1,
-    SWD_TUNNEL_OP_TRANSFER,
+    SWD_TUNNEL_OP_BLOCK,
     SWD_TUNNEL_OP_RESET,
     SWD_TUNNEL_OP_SEQUENCE,
     SWD_TUNNEL_OP_CLOCK,
@@ -63,7 +62,7 @@ typedef struct {
     uint8_t transaction_id;
     uint8_t completed;
     uint8_t ack;
-    uint32_t data[SWD_TUNNEL_MAX_TRANSFERS];
+    uint32_t data[SWD_TUNNEL_MAX_BLOCK_TRANSFERS];
     /* raw 保存四字节响应头之后的操作专用数据。 */
     uint8_t raw_length;
     uint8_t raw[SWD_TUNNEL_MAX_PAYLOAD - 4U];
@@ -93,9 +92,6 @@ uint8_t swd_tunnel_encode_configure(uint8_t transaction_id,
 uint8_t swd_tunnel_encode_pins(uint8_t transaction_id,
                                uint8_t value, uint8_t select,
                                uint32_t wait_us, uint8_t *payload);
-uint8_t swd_tunnel_encode_transfers(
-    uint8_t transaction_id, const swd_tunnel_transfer_t *transfers,
-    uint8_t count, uint8_t *payload);
 uint8_t swd_tunnel_encode_block(
     uint8_t transaction_id, const swd_tunnel_transfer_t *transfers,
     uint8_t count, uint8_t *payload);
@@ -109,7 +105,7 @@ bool swd_tunnel_decode_block_response(
     swd_tunnel_block_response_t *response);
 /* submit 会复制请求；同时只能有一个活动请求。 */
 bool swd_tunnel_submit(const uint8_t *request, uint8_t request_length);
-/* 直接提交压缩 block，避免有线和无线路径重新编码 legacy transfer。 */
+/* 有线和无线都直接提交压缩 block。 */
 bool swd_tunnel_submit_block(uint8_t transaction_id,
                              const swd_tunnel_transfer_t *transfers,
                              uint8_t count);
