@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 校验 Git 工作树结构、空白和跟踪文件不变量，同时保留检出目录中的用户修改。
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $lockPath = Join-Path $repoRoot "dependencies.lock.json"

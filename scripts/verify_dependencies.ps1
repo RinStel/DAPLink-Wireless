@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 将检出的 vendor 树与 dependencies.lock.json 比较，不下载或修改依赖。
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $lockPath = Join-Path $repoRoot "dependencies.lock.json"

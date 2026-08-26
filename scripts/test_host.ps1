@@ -1,17 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 使用严格警告编译并执行每个主机回归；all 是 verify_release.ps1 使用的软件门禁。
 param(
     [ValidateSet(
         "all",
+        "board-pins",
+        "status-indicator",
         "cmsis-dap",
+        "target-swd-config",
+        "cdc-transport",
+        "cmsis-dap-usb",
         "radio-protocol",
+        "serial-bridge-window",
         "device-config",
         "config-storage",
         "swd-tunnel",
+        "target-uart-irq",
+        "target-uart-ring",
         "link-adaptation",
         "sx1281",
         "usb-descriptor",
-        "usb-disk"
+        "usb-disk",
+        "startup-sequence"
     )]
     [string]$Name = "all",
     [string]$Compiler = "gcc"
@@ -28,6 +38,25 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "board-pins" = @{
+        label = "Board pin mapping"
+        defines = @("GD32F30X_HD")
+        includes = @("firmware/bsp", "firmware/usb")
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include"
+        )
+        sources = @("tests/board_pins_test.c")
+    }
+    "status-indicator" = @{
+        label = "Status indicator"
+        includes = @("firmware/app")
+        sources = @(
+            "tests/status_indicator_test.c",
+            "firmware/app/status_indicator.c"
+        )
+    }
     "cmsis-dap" = @{
         label = "CMSIS-DAP protocol"
         includes = @(
@@ -41,6 +70,38 @@ $tests = [ordered]@{
             "firmware/app/cmsis_dap.c"
         )
     }
+    "target-swd-config" = @{
+        label = "Target SWD configuration"
+        includes = @("firmware/drivers/swd")
+        sources = @("tests/target_swd_config_test.c")
+    }
+    "cdc-transport" = @{
+        label = "CDC ACM transport"
+        defines = @("GD32F30X_HD")
+        includes = @("firmware/bsp", "firmware/usb")
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include",
+            "vendor/GD32F30x_usbd_library/device/Include",
+            "vendor/GD32F30x_usbd_library/usbd/Include",
+            "vendor/GD32F30x_usbd_library/class/device/cdc/Include"
+        )
+        sources = @("tests/cdc_acm_transport_test.c")
+    }
+    "cmsis-dap-usb" = @{
+        label = "CMSIS-DAP USB transport"
+        defines = @("GD32F30X_HD")
+        includes = @("firmware/app", "firmware/bsp", "firmware/usb")
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include",
+            "vendor/GD32F30x_usbd_library/device/Include",
+            "vendor/GD32F30x_usbd_library/usbd/Include"
+        )
+        sources = @("tests/cmsis_dap_usb_transport_test.c")
+    }
     "radio-protocol" = @{
         label = "Radio protocol"
         analyzer = $true
@@ -49,6 +110,14 @@ $tests = [ordered]@{
             "tests/radio_protocol_test.c",
             "firmware/app/radio_protocol.c",
             "firmware/app/frequency_hopping.c"
+        )
+    }
+    "serial-bridge-window" = @{
+        label = "Serial bridge DATA window"
+        includes = @("firmware/app")
+        sources = @(
+            "tests/serial_bridge_window_test.c",
+            "firmware/app/radio_window.c"
         )
     }
     "device-config" = @{
@@ -84,6 +153,37 @@ $tests = [ordered]@{
         sources = @(
             "tests/swd_tunnel_protocol_test.c",
             "firmware/app/swd_tunnel.c"
+        )
+    }
+    "target-uart-ring" = @{
+        label = "Target UART ring"
+        includes = @("firmware/drivers/serial")
+        sources = @(
+            "tests/target_uart_ring_test.c",
+            "firmware/drivers/serial/target_uart_ring.c"
+        )
+    }
+    "target-uart-irq" = @{
+        label = "Target UART IRQ"
+        defines = @("GD32F30X_HD")
+        compile_flags = @(
+            "-ffunction-sections",
+            "-fdata-sections",
+            "-Wno-pointer-to-int-cast"
+        )
+        link_flags = @("-Wl,--gc-sections")
+        includes = @(
+            "firmware/bsp",
+            "firmware/drivers/serial"
+        )
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include"
+        )
+        sources = @(
+            "tests/target_uart_irq_test.c",
+            "firmware/drivers/serial/target_uart_ring.c"
         )
     }
     "link-adaptation" = @{
@@ -153,6 +253,19 @@ $selectedTests = if ($Name -eq "all") {
     @($tests.Keys)
 } else {
     @($Name)
+}
+
+if (($Name -eq "all") -or ($Name -eq "startup-sequence")) {
+    & (Join-Path $repoRoot "tests/startup_sequence_test.ps1") -RepoRoot $repoRoot
+    if (-not $?) {
+        throw "Startup sequence tests failed"
+    }
+    if ($Name -eq "startup-sequence") {
+        exit 0
+    }
+    $selectedTests = @($selectedTests | Where-Object {
+        $_ -ne "startup-sequence"
+    })
 }
 
 foreach ($testName in $selectedTests) {

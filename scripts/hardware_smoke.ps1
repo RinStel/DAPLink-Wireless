@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 这是只读 pyOCD 冒烟检查：验证探针/目标访问和复位原因读取，不烧录固件，
+# 也不能证明应用行为。
 param(
     [Parameter(Mandatory = $true)]
     [string]$Target,

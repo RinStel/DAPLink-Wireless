@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 只打包已验证的 Release 产物。替换已有目录前先确认路径仍位于 dist 下。
 param(
     [string]$ToolchainBin = "",
     [string]$KeilPath = "",

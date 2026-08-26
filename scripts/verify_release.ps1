@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 运行仓库、依赖、主机测试和两次构建门禁；打包前比较 Release 产物哈希，
+# 检测不可复现输出。
 param(
     [string]$ToolchainBin = "",
     [string]$KeilPath = "",
@@ -74,6 +76,9 @@ if (-not $radioProtocolMatch.Success -or
     [int]$manifest.radio_protocol -ne
         [int]$radioProtocolMatch.Groups[1].Value) {
     throw "Radio protocol header and release manifest versions do not match"
+}
+if ([int]$manifest.radio_protocol -ne 2) {
+    throw "Release manifest must declare radio protocol v2"
 }
 $sourceFingerprint = Get-ReleaseSourceFingerprint $repoRoot
 if (($manifest.source_tree_sha256 -ne $sourceFingerprint.sha256) -or

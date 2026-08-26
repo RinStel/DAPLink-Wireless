@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 拒绝源码树中的固件生成物；-CleanGenerated 只删除 firmware 下明确列出的文件。
 param(
     [switch]$CleanGenerated
 )

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 发布元数据公共函数。指纹有意覆盖会影响二进制的源码、工具链输入和验证脚本。
 function Get-ReleaseSourceFingerprint([string]$repoRoot) {
     $sourceRoots = @(
         "firmware/app",

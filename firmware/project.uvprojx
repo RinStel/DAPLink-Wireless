@@ -19,7 +19,7 @@
           <Vendor>GigaDevice</Vendor>
           <PackID>GigaDevice.GD32F30x_DFP.2.2.1</PackID>
           <PackURL>https://gd32mcu.com/data/documents/pack/</PackURL>
-          <Cpu>IRAM(0x20000000,0x0C000) IROM(0x08000000,0x03F000) CPUTYPE("Cortex-M4") FPU2 CLOCK(12000000) ELITTLE</Cpu>
+          <Cpu>IRAM(0x20000000,0x0C000) IROM(0x08000000,0x03F000) CPUTYPE("Cortex-M4") FPU2 CLOCK(120000000) ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
           <StartupFile></StartupFile>
           <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0GD32F30x_HD -FS08000000 -FL040000 -FP0($$Device:GD32F303CC$Flash\GD32F30x_HD.FLM))</FlashDriverDll>
@@ -135,7 +135,7 @@
             <RunIndependent>0</RunIndependent>
             <UpdateFlashBeforeDebugging>1</UpdateFlashBeforeDebugging>
             <Capability>1</Capability>
-            <DriverSelection>-1</DriverSelection>
+            <DriverSelection>4096</DriverSelection>
           </Flash1>
           <bUseTDR>1</bUseTDR>
           <Flash2>BIN\UL2CM3.DLL</Flash2>
@@ -339,7 +339,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>GD32F30X_HD,HXTAL_VALUE=8000000U</Define>
+              <Define>GD32F30X_HD,HXTAL_VALUE=8000000U,USBD_EP0_MAX_SIZE=32U</Define>
               <Undefine></Undefine>
               <IncludePath>.\app;.\bsp;.\drivers\radio;.\drivers\serial;.\drivers\swd;.\usb;..\vendor\GD32F30x_usbd_library\device\Include;..\vendor\GD32F30x_usbd_library\usbd\Include;..\vendor\GD32F30x_usbd_library\class\device\msc\Include;..\vendor\GD32F30x_usbd_library\class\device\cdc\Include;..\vendor\GD32_CMSIS;..\vendor\GD32_CMSIS\GD\GD32F30x\Include;..\vendor\GD32F30x_standard_peripheral\Include</IncludePath>
             </VariousControls>
@@ -411,6 +411,11 @@
               <FilePath>.\app\radio_protocol.c</FilePath>
             </File>
             <File>
+              <FileName>radio_window.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\app\radio_window.c</FilePath>
+            </File>
+            <File>
               <FileName>serial_service.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\app\serial_service.c</FilePath>
@@ -419,6 +424,11 @@
               <FileName>serial_bridge.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\app\serial_bridge.c</FilePath>
+            </File>
+            <File>
+              <FileName>status_indicator.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\app\status_indicator.c</FilePath>
             </File>
             <File>
               <FileName>swd_bridge_service.c</FileName>
@@ -680,6 +690,11 @@
               <FileType>1</FileType>
               <FilePath>.\drivers\serial\target_uart.c</FilePath>
             </File>
+            <File>
+              <FileName>target_uart_ring.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\drivers\serial\target_uart_ring.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -729,6 +744,11 @@
               <FileName>gd32f30x_usart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_usart.c</FilePath>
+            </File>
+            <File>
+              <FileName>gd32f30x_dma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\vendor\GD32F30x_standard_peripheral\Source\gd32f30x_dma.c</FilePath>
             </File>
           </Files>
         </Group>

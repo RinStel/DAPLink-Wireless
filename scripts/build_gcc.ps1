@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
+# 使用指定 GCC 配置构建固件并生成 ELF/HEX/BIN；Release 还会生成供
+# package_release.ps1 使用的 manifest。
 param(
     [string]$ToolchainBin = "",
     [string]$Configuration = "Debug"
@@ -54,6 +56,7 @@ if ([string]::IsNullOrWhiteSpace($ToolchainBin)) {
 $gcc = Find-Tool "arm-none-eabi-gcc" $ToolchainBin
 $objcopy = Find-Tool "arm-none-eabi-objcopy" $ToolchainBin
 $size = Find-Tool "arm-none-eabi-size" $ToolchainBin
+$nm = Find-Tool "arm-none-eabi-nm" $ToolchainBin
 # GCC invokes sibling programs such as cc1.exe and the assembler. Keep the
 # selected toolchain directory visible to those child processes on Windows.
 if ($isWindowsHost) {
@@ -112,8 +115,10 @@ $sourcePaths = @(
     "firmware/app/frequency_hopping.c",
     "firmware/app/link_adaptation.c",
     "firmware/app/radio_protocol.c",
+    "firmware/app/radio_window.c",
     "firmware/app/serial_service.c",
     "firmware/app/serial_bridge.c",
+    "firmware/app/status_indicator.c",
     "firmware/app/swd_bridge_service.c",
     "firmware/app/swd_tunnel.c",
     "firmware/app/device_config.c",
@@ -128,6 +133,7 @@ $sourcePaths = @(
     "firmware/drivers/radio/radio_hal.c",
     "firmware/drivers/radio/sx128x.c",
     "firmware/drivers/serial/target_uart.c",
+    "firmware/drivers/serial/target_uart_ring.c",
     "firmware/drivers/swd/target_swd.c",
     "firmware/toolchain/gcc/syscalls.c",
     "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_gpio.c",
@@ -137,6 +143,7 @@ $sourcePaths = @(
     "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_fwdgt.c",
     "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_misc.c",
     "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_usart.c",
+    "vendor/GD32F30x_standard_peripheral/Source/gd32f30x_dma.c",
     "vendor/GD32F30x_usbd_library/device/Source/usbd_core.c",
     "vendor/GD32F30x_usbd_library/device/Source/usbd_enum.c",
     "vendor/GD32F30x_usbd_library/device/Source/usbd_pwr.c",
@@ -159,6 +166,15 @@ foreach ($source in $sources) {
     $objectName = ($relative -replace '[\\/:]', '_') + ".o"
     $object = Join-Path $buildDir $objectName
     $sourceFlags = @()
+    $sourceFlags += "-DUSBD_EP0_MAX_SIZE=32U"
+
+    if ($relative.EndsWith(
+            "firmware/drivers/swd/target_swd.c",
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        # SWD bit-bang is the cycle-critical path; keep the rest of the
+        # firmware at the selected size/debug optimization level.
+        $sourceFlags += "-O3"
+    }
 
     if ($relative.StartsWith(
             "vendor/", [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -183,6 +199,14 @@ foreach ($source in $sources) {
         -c $source -o $object
     if ($LASTEXITCODE -ne 0) {
         throw "Compilation failed: $source"
+    }
+    if ($relative.EndsWith(
+            "firmware/drivers/swd/target_swd.c",
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        $undefinedSymbols = & $nm -u $object | Out-String
+        if ($undefinedSymbols -match "\bboard_cycle_count\b") {
+            throw "SWD hot path still calls board_cycle_count: $object"
+        }
     }
 }
 
