@@ -51,7 +51,7 @@ int main(void)
 
     memset(maximum_payload, 0xA5, sizeof(maximum_payload));
     length = radio_protocol_build(
-        frame, RADIO_FRAME_SWD_RESPONSE, 0x12345678U, 1U, 2U,
+        frame, RADIO_FRAME_SWD_COMMAND_RESPONSE, 0x12345678U, 1U, 2U,
         maximum_payload, sizeof(maximum_payload));
     assert(length == RADIO_PROTOCOL_FRAME_SIZE);
     for (index = 0U; index < length; ++index) {

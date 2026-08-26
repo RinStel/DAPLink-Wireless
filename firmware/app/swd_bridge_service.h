@@ -33,7 +33,7 @@ bool swd_bridge_service_begin(device_mode_t mode,
 bool swd_bridge_service_begin_block(device_mode_t mode, uint8_t transaction_id,
                                     const swd_tunnel_transfer_t *transfers,
                                     uint8_t count);
-bool swd_bridge_service_wireless_request(const uint8_t *payload,
+bool swd_bridge_service_wireless_command(const uint8_t *payload,
                                          uint8_t length);
 bool swd_bridge_service_wireless_block_request(const uint8_t *payload,
                                                uint8_t length);

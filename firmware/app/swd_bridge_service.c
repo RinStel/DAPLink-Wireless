@@ -137,8 +137,6 @@ bool swd_bridge_service_begin_block(device_mode_t mode, uint8_t transaction_id,
                                     const swd_tunnel_transfer_t *transfers,
                                     uint8_t count)
 {
-    uint8_t payload[SWD_TUNNEL_MAX_PAYLOAD];
-
     if ((transfers == NULL) || (count == 0U) ||
         (count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) || s_request_active ||
         (mode != DEVICE_MODE_WIRED && mode != DEVICE_MODE_WIRELESS_HOST)) {
@@ -152,11 +150,8 @@ bool swd_bridge_service_begin_block(device_mode_t mode, uint8_t transaction_id,
     s_request_active = true;
     s_response_ready = false;
     if (mode == DEVICE_MODE_WIRED) {
-        uint8_t length = swd_tunnel_encode_transfers(
-            transaction_id, transfers, count, payload);
-
-        if ((length == 0U) || (s_owner != SWD_OWNER_NONE) ||
-            !swd_tunnel_submit(payload, length)) {
+        if ((s_owner != SWD_OWNER_NONE) ||
+            !swd_tunnel_submit_block(transaction_id, transfers, count)) {
             s_request_active = false;
             s_block_active = false;
             return false;
@@ -166,10 +161,12 @@ bool swd_bridge_service_begin_block(device_mode_t mode, uint8_t transaction_id,
     return true;
 }
 
-bool swd_bridge_service_wireless_request(const uint8_t *payload,
+bool swd_bridge_service_wireless_command(const uint8_t *payload,
                                          uint8_t length)
 {
     if ((s_owner != SWD_OWNER_NONE) || s_reply_ready ||
+        (payload == NULL) || (length < 2U) ||
+        (payload[0] == SWD_TUNNEL_OP_TRANSFER) ||
         !swd_tunnel_submit(payload, length)) {
         return false;
     }
@@ -182,17 +179,14 @@ bool swd_bridge_service_wireless_block_request(const uint8_t *payload,
                                                uint8_t length)
 {
     swd_tunnel_block_t block;
-    uint8_t legacy[SWD_TUNNEL_MAX_PAYLOAD];
-    uint8_t legacy_length;
 
     if ((s_owner != SWD_OWNER_NONE) || s_reply_ready ||
         !swd_tunnel_decode_block(payload, length, &block) ||
         (block.count > SWD_TUNNEL_MAX_TRANSFERS)) {
         return false;
     }
-    legacy_length = swd_tunnel_encode_transfers(
-        block.transaction_id, block.transfers, block.count, legacy);
-    if ((legacy_length == 0U) || !swd_tunnel_submit(legacy, legacy_length)) {
+    if (!swd_tunnel_submit_block(block.transaction_id, block.transfers,
+                                 block.count)) {
         return false;
     }
     memcpy(s_block_transfers, block.transfers,

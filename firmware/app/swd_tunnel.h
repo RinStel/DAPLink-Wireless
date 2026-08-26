@@ -109,6 +109,10 @@ bool swd_tunnel_decode_block_response(
     swd_tunnel_block_response_t *response);
 /* submit 会复制请求；同时只能有一个活动请求。 */
 bool swd_tunnel_submit(const uint8_t *request, uint8_t request_length);
+/* 直接提交压缩 block，避免有线和无线路径重新编码 legacy transfer。 */
+bool swd_tunnel_submit_block(uint8_t transaction_id,
+                             const swd_tunnel_transfer_t *transfers,
+                             uint8_t count);
 void swd_tunnel_process(void);
 /* 取消采用协作式处理，在后续 process 调用中完成。 */
 void swd_tunnel_cancel(void);

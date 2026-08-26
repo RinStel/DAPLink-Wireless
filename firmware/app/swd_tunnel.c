@@ -73,6 +73,10 @@ static uint8_t s_transfer_index;
 static uint8_t s_transfer_completed;
 static uint32_t s_transfer_started_at;
 static uint32_t s_transfer_data;
+static bool s_block_request;
+static uint8_t s_block_count;
+static swd_tunnel_transfer_t s_block_transfers[
+    SWD_TUNNEL_MAX_BLOCK_TRANSFERS];
 
 static void encode_u32_le(uint8_t *output, uint32_t value)
 {
@@ -704,6 +708,7 @@ static void transfer_async_finish(target_swd_ack_t ack)
                                   s_transfer_completed * 4U);
     s_transfer_async = false;
     s_transfer_poll_pending = false;
+    s_block_request = false;
     s_executing = false;
     if (!s_cancelled) {
         s_response_ready = true;
@@ -712,7 +717,7 @@ static void transfer_async_finish(target_swd_ack_t ack)
 
 static void transfer_async_start(void)
 {
-    s_transfer_count = s_request[2];
+    s_transfer_count = s_block_request ? s_block_count : s_request[2];
     s_transfer_index = 0U;
     s_transfer_completed = 0U;
     s_transfer_started_at = board_millis();
@@ -734,9 +739,22 @@ static bool transfer_is_plain_ap_read(uint8_t request)
            (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW);
 }
 
+static uint8_t transfer_request_at(uint8_t index)
+{
+    return s_block_request
+               ? s_block_transfers[index].request
+               : s_request[3U + index * 5U];
+}
+
+static uint32_t transfer_data_at(uint8_t index)
+{
+    return s_block_request
+               ? s_block_transfers[index].data
+               : decode_u32_le(&s_request[4U + index * 5U]);
+}
+
 static void transfer_async_process(void)
 {
-    uint8_t offset = 0U;
     uint8_t request = 0U;
     target_swd_ack_t ack;
     target_swd_poll_result_t poll_result;
@@ -748,8 +766,7 @@ static void transfer_async_process(void)
         return;
     }
     if (s_transfer_index < s_transfer_count) {
-        offset = (uint8_t)(3U + s_transfer_index * 5U);
-        request = s_request[offset];
+        request = transfer_request_at(s_transfer_index);
     }
     if (!s_transfer_poll_pending) {
         uint8_t physical_request;
@@ -766,7 +783,7 @@ static void transfer_async_process(void)
             s_transfer_phase = TRANSFER_PHASE_WRITE_CHECK;
         } else {
             if ((request & SWD_TRANSFER_MATCH_MASK) != 0U) {
-                s_match_mask = decode_u32_le(&s_request[offset + 1U]);
+                s_match_mask = transfer_data_at(s_transfer_index);
                 encode_u32_le(
                     &s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
                                 s_transfer_completed * 4U],
@@ -782,7 +799,7 @@ static void transfer_async_process(void)
                                ? request
                                : SWD_DP_RDBUFF_READ;
         s_transfer_data = s_transfer_phase == TRANSFER_PHASE_NORMAL
-                              ? decode_u32_le(&s_request[offset + 1U])
+                              ? transfer_data_at(s_transfer_index)
                               : 0U;
         if (!target_swd_transfer_begin(physical_request,
                                        &s_transfer_data)) {
@@ -820,7 +837,7 @@ static void transfer_async_process(void)
     } else {
         if ((request & SWD_TRANSFER_MATCH_VALUE) != 0U &&
             ((s_transfer_data & s_match_mask) !=
-             decode_u32_le(&s_request[offset + 1U]))) {
+             transfer_data_at(s_transfer_index))) {
             transfer_async_finish((target_swd_ack_t)(
                 (uint8_t)ack | SWD_TRANSFER_MISMATCH));
             return;
@@ -862,6 +879,38 @@ bool swd_tunnel_submit(const uint8_t *request, uint8_t request_length)
     }
     memcpy(s_request, request, request_length);
     s_request_length = request_length;
+    s_request_ready = true;
+    s_cancelled = false;
+    s_block_request = false;
+    return true;
+}
+
+bool swd_tunnel_submit_block(uint8_t transaction_id,
+                             const swd_tunnel_transfer_t *transfers,
+                             uint8_t count)
+{
+    uint8_t index;
+
+    if ((transfers == NULL) || (count == 0U) ||
+        (count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) || s_pending ||
+        s_request_ready || s_executing || s_response_ready) {
+        return false;
+    }
+    for (index = 0U; index < count; ++index) {
+        uint8_t request = transfers[index].request & 0x3FU;
+
+        if (!block_request_supported(request)) {
+            return false;
+        }
+        s_block_transfers[index] = transfers[index];
+        s_block_transfers[index].request = request;
+    }
+    s_block_count = count;
+    s_request[0] = SWD_TUNNEL_OP_TRANSFER;
+    s_request[1] = transaction_id;
+    s_request[2] = count;
+    s_request_length = 3U;
+    s_block_request = true;
     s_request_ready = true;
     s_cancelled = false;
     return true;

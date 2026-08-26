@@ -357,6 +357,32 @@ int main(void)
         assert(response.ack == TARGET_SWD_ACK_OK);
     }
 
+    {
+        swd_tunnel_transfer_t block_reads[2] = {
+            {.request = 0x0FU, .data = 0U},
+            {.request = 0x0FU, .data = 0U}
+        };
+
+        s_transfer_calls = 0U;
+        s_async_request_count = 0U;
+        s_async_result_count = 3U;
+        s_async_results[0] = 0U;
+        s_async_results[1] = 0x33333333U;
+        s_async_results[2] = 0x44444444U;
+        assert(swd_tunnel_submit_block(19U, block_reads, 2U));
+        while (!swd_tunnel_response_take(payload, &length)) {
+            swd_tunnel_process();
+        }
+        assert(swd_tunnel_decode_response(payload, length, &response));
+        assert(s_transfer_calls == 3U);
+        assert(s_async_requests[0] == 0x0FU);
+        assert(s_async_requests[1] == 0x0FU);
+        assert(s_async_requests[2] == 0x0EU);
+        assert(response.completed == 2U);
+        assert(response.data[0] == 0x33333333U);
+        assert(response.data[1] == 0x44444444U);
+    }
+
     assert(swd_tunnel_decode_response(
         raw_response, sizeof(raw_response), &response));
     assert(response.operation == SWD_TUNNEL_OP_SWD_SEQUENCE);
