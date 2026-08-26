@@ -1186,7 +1186,7 @@ bool serial_bridge_activity_led(void)
     return (int32_t)(s_activity_until - board_millis()) > 0;
 }
 
-static bool swd_request_queue(const uint8_t *payload, uint8_t length)
+static bool swd_command_queue(const uint8_t *payload, uint8_t length)
 {
     device_mode_t mode = device_config_get()->device_mode;
 
@@ -1208,7 +1208,7 @@ bool serial_bridge_swd_connect(uint8_t transaction_id)
 {
     uint8_t payload[2];
 
-    return swd_request_queue(payload,
+    return swd_command_queue(payload,
                              swd_tunnel_encode_connect(transaction_id,
                                                        payload));
 }
@@ -1217,7 +1217,7 @@ bool serial_bridge_swd_disconnect(uint8_t transaction_id)
 {
     uint8_t payload[2];
 
-    return swd_request_queue(
+    return swd_command_queue(
         payload, swd_tunnel_encode_disconnect(transaction_id, payload));
 }
 
@@ -1225,7 +1225,7 @@ bool serial_bridge_swd_reset(uint8_t transaction_id)
 {
     uint8_t payload[2];
 
-    return swd_request_queue(payload,
+    return swd_command_queue(payload,
                              swd_tunnel_encode_reset(transaction_id,
                                                      payload));
 }
@@ -1236,7 +1236,7 @@ bool serial_bridge_swd_sequence(uint8_t transaction_id,
 {
     uint8_t payload[BRIDGE_PAYLOAD_SIZE];
 
-    return swd_request_queue(
+    return swd_command_queue(
         payload, swd_tunnel_encode_sequence(transaction_id, bit_count,
                                             data, payload));
 }
@@ -1247,7 +1247,7 @@ bool serial_bridge_swd_sequence_io(uint8_t transaction_id,
 {
     uint8_t payload[BRIDGE_PAYLOAD_SIZE];
 
-    return swd_request_queue(
+    return swd_command_queue(
         payload, swd_tunnel_encode_swd_sequence(
                      transaction_id, request, request_length, payload));
 }
@@ -1256,7 +1256,7 @@ bool serial_bridge_swd_clock(uint8_t transaction_id, uint32_t clock_hz)
 {
     uint8_t payload[6];
 
-    return swd_request_queue(
+    return swd_command_queue(
         payload, swd_tunnel_encode_clock(transaction_id, clock_hz,
                                          payload));
 }
@@ -1270,7 +1270,7 @@ bool serial_bridge_swd_configure(uint8_t transaction_id,
 {
     uint8_t payload[9];
 
-    return swd_request_queue(
+    return swd_command_queue(
         payload, swd_tunnel_encode_configure(
                      transaction_id, idle_cycles, retry_count,
                      match_retry, turnaround, data_phase, payload));
@@ -1281,7 +1281,7 @@ bool serial_bridge_swd_pins(uint8_t transaction_id, uint8_t value,
 {
     uint8_t payload[8];
 
-    return swd_request_queue(
+    return swd_command_queue(
         payload, swd_tunnel_encode_pins(transaction_id, value, select,
                                         wait_us, payload));
 }
@@ -1321,6 +1321,13 @@ bool serial_bridge_swd_transfers(
 bool serial_bridge_swd_response_take(swd_tunnel_response_t *response)
 {
     return swd_bridge_service_response_take(response);
+}
+
+void serial_bridge_swd_pump(void)
+{
+    /* 只推进本地 SWD 引擎和它的响应路由。无线模式下响应来自射频，隧道空闲，
+     * 因此这里不会重复消费射频状态。 */
+    swd_tunnel_process_pending();
 }
 
 void serial_bridge_swd_cancel(uint8_t transaction_id)

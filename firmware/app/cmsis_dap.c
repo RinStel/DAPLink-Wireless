@@ -841,6 +841,9 @@ void cmsis_dap_process(void)
         response_finish(s_response_length);
         return;
     }
+    /* 先推进本地 SWD 引擎，再取响应。否则有线 block 要等到下一轮主循环才
+     * 能被取走，每个 block 白付一轮调度开销。 */
+    serial_bridge_swd_pump();
     if (serial_bridge_swd_response_take(&result)) {
         /* 事务 ID 用于丢弃已取消操作的迟到无线或 UART 响应。 */
         if (result.transaction_id != s_transaction_id) {

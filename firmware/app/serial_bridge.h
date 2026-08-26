@@ -75,6 +75,10 @@ bool serial_bridge_swd_pins(uint8_t transaction_id, uint8_t value,
 bool serial_bridge_swd_transfers(uint8_t transaction_id,
                                  const swd_tunnel_transfer_t *transfers,
                                  uint8_t count);
+/* 在等待 SWD 响应期间推进本地 SWD 引擎。命令核心提交请求后可立即调用，
+ * 使有线 block 在同一次主循环内完成，而不必多等一轮调度。无线模式下本地
+ * 引擎并非响应来源，此时为空操作。 */
+void serial_bridge_swd_pump(void);
 void serial_bridge_swd_cancel(uint8_t transaction_id);
 /* 只有取消完成后才返回 true。 */
 bool serial_bridge_swd_cancel_complete(uint8_t transaction_id);

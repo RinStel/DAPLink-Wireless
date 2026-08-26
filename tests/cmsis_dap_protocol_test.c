@@ -20,6 +20,8 @@ static uint32_t s_now_ms;
 static uint8_t s_transaction;
 static bool s_response_available;
 static bool s_cancelled;
+static uint32_t s_pump_calls;
+static bool s_pump_completes;
 static bool s_cancel_complete;
 static swd_tunnel_response_t s_bridge_response;
 static swd_tunnel_transfer_t s_captured_transfers[16];
@@ -143,6 +145,22 @@ bool serial_bridge_swd_cancel_complete(uint8_t transaction_id)
 {
     assert(transaction_id == s_transaction);
     return s_cancel_complete;
+}
+
+void serial_bridge_swd_pump(void)
+{
+    ++s_pump_calls;
+    /* 模拟本地 SWD 引擎在 pump 期间完成 block：响应必须能在同一次
+     * cmsis_dap_process() 内被取走。 */
+    if (s_pump_completes) {
+        s_pump_completes = false;
+        memset(&s_bridge_response, 0, sizeof(s_bridge_response));
+        s_bridge_response.operation = SWD_TUNNEL_OP_BLOCK;
+        s_bridge_response.transaction_id = s_transaction;
+        s_bridge_response.completed = 1U;
+        s_bridge_response.ack = TARGET_SWD_ACK_OK;
+        s_response_available = true;
+    }
 }
 
 bool serial_bridge_swd_response_take(swd_tunnel_response_t *response)
@@ -289,7 +307,7 @@ int main(void)
     assert(s_captured_transfer_count == 1U);
     assert(s_captured_transfers[0].request == 0x02U);
     memset(&s_bridge_response, 0, sizeof(s_bridge_response));
-    s_bridge_response.operation = SWD_TUNNEL_OP_TRANSFER;
+    s_bridge_response.operation = SWD_TUNNEL_OP_BLOCK;
     s_bridge_response.transaction_id = s_transaction;
     s_bridge_response.completed = 1U;
     s_bridge_response.ack = TARGET_SWD_ACK_OK;
@@ -314,7 +332,7 @@ int main(void)
     }
     assert(cmsis_dap_submit(request, 63U));
     assert(s_captured_transfer_count == 12U);
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 12U, TARGET_SWD_ACK_OK);
+    bridge_complete(SWD_TUNNEL_OP_BLOCK, 12U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 3U);
     assert(response[1] == 12U);
     assert(response[2] == TARGET_SWD_ACK_OK);
@@ -327,7 +345,7 @@ int main(void)
     }
     assert(cmsis_dap_submit(request, 63U));
     assert(s_captured_transfer_count == 12U);
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 13U, TARGET_SWD_ACK_OK);
+    bridge_complete(SWD_TUNNEL_OP_BLOCK, 13U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 3U);
     assert(response[2] == 0x08U);
 
@@ -342,7 +360,7 @@ int main(void)
     assert(s_captured_transfer_count == 2U);
     assert(s_captured_transfers[0].request == 0x20U);
     assert(s_captured_transfers[1].request == 0x12U);
-    bridge_complete(SWD_TUNNEL_OP_TRANSFER, 2U, TARGET_SWD_ACK_OK);
+    bridge_complete(SWD_TUNNEL_OP_BLOCK, 2U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 3U);
     assert(response[1] == 2U);
 
@@ -424,6 +442,31 @@ int main(void)
     assert(cmsis_dap_submit(request, 4U));
     assert(response_take(response) == 3U);
     assert(response[2] == 0x08U);
+
+    /* 单轮完成回归：命令核心必须在取响应之前推进本地 SWD 引擎，使有线
+     * block 不必多等一轮主循环调度。 */
+    cmsis_dap_init();
+    request[0] = DAP_CONNECT;
+    request[1] = 1U;
+    assert(cmsis_dap_submit(request, 2U));
+    bridge_complete(SWD_TUNNEL_OP_CONNECT, 1U, TARGET_SWD_ACK_OK);
+    assert(response_take(response) == 2U);
+    assert(response[1] == 1U);
+
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_TRANSFER;
+    request[2] = 1U;
+    request[3] = 0x00U;
+    s_pump_calls = 0U;
+    s_pump_completes = true;
+    assert(cmsis_dap_submit(request, 8U));
+    /* 一次 process 即可完成：pump 先执行，响应随后立即被取走。 */
+    cmsis_dap_process();
+    assert(s_pump_calls == 1U);
+    assert(response_take(response) == 3U);
+    assert(response[0] == DAP_TRANSFER);
+    assert(response[1] == 1U);
+    assert(response[2] == TARGET_SWD_ACK_OK);
 
     return 0;
 }

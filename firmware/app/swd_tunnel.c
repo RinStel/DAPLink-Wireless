@@ -36,6 +36,10 @@
 #define SWD_TUNNEL_DEFAULT_WAIT_RETRIES 100U
 #define SWD_TUNNEL_MAX_WAIT_RETRIES     1024U
 #define SWD_TUNNEL_EXECUTION_BUDGET_MS 2500U
+/* 单次 swd_tunnel_process() 内连续推进 SWD 事务的时间预算。4 MHz 下一个
+ * 字约 13.5 us，400 us 足以在一次主循环内跑完整个 block，同时把主循环
+ * 最坏延迟保持在 USB SOF 和看门狗周期以内。 */
+#define SWD_TUNNEL_BATCH_BUDGET_US 400U
 #define SWD_TUNNEL_SEQUENCE_DATA_OFFSET 4U
 #define SWD_TUNNEL_MAX_SEQUENCE_BITS \
     480U
@@ -623,7 +627,9 @@ static uint32_t transfer_data_at(uint8_t index)
                : decode_u32_le(&s_request[4U + index * 5U]);
 }
 
-static void transfer_async_process(void)
+/* 推进一个 SWD 事务阶段。返回 true 表示调用方可以在同一次
+ * swd_tunnel_process() 内继续推进；false 表示必须让出主循环。 */
+static bool transfer_async_step(void)
 {
     uint8_t request = 0U;
     target_swd_ack_t ack;
@@ -633,7 +639,7 @@ static void transfer_async_process(void)
                            SWD_TUNNEL_EXECUTION_BUDGET_MS) {
         target_swd_transfer_cancel();
         transfer_async_finish(TARGET_SWD_ACK_WAIT);
-        return;
+        return false;
     }
     if (s_transfer_index < s_transfer_count) {
         request = transfer_request_at(s_transfer_index);
@@ -648,7 +654,7 @@ static void transfer_async_process(void)
         } else if (s_transfer_index >= s_transfer_count) {
             if (!s_transfer_check_write) {
                 transfer_async_finish(TARGET_SWD_ACK_OK);
-                return;
+                return false;
             }
             s_transfer_phase = TRANSFER_PHASE_WRITE_CHECK;
         } else {
@@ -661,7 +667,7 @@ static void transfer_async_process(void)
                 ++s_transfer_index;
                 ++s_transfer_completed;
                 s_transfer_wait_retries = 0U;
-                return;
+                return true;
             }
             s_transfer_phase = TRANSFER_PHASE_NORMAL;
         }
@@ -674,7 +680,7 @@ static void transfer_async_process(void)
         if (!target_swd_transfer_begin(physical_request,
                                        &s_transfer_data)) {
             transfer_async_finish(TARGET_SWD_ACK_WAIT);
-            return;
+            return false;
         }
         s_transfer_poll_pending = true;
         /* 不在此处让出主循环。begin() 只登记请求，真正的 bit-bang 发生在
@@ -682,7 +688,7 @@ static void transfer_async_process(void)
     }
     poll_result = target_swd_transfer_poll(&ack);
     if (poll_result == TARGET_SWD_POLL_BUSY) {
-        return;
+        return false;
     }
     s_transfer_poll_pending = false;
     if ((poll_result == TARGET_SWD_POLL_DONE) &&
@@ -691,12 +697,12 @@ static void transfer_async_process(void)
         /* WAIT 只结束当前 SWD bit-bang 尝试；保留当前 index 和数据，在下次
          * 主循环重新发起同一 transfer，避免一次轮询长时间独占 USB/无线。 */
         ++s_transfer_wait_retries;
-        return;
+        return false;
     }
     if ((poll_result != TARGET_SWD_POLL_DONE) ||
         (ack != TARGET_SWD_ACK_OK)) {
         transfer_async_finish(ack);
-        return;
+        return false;
     }
     if (s_transfer_phase == TRANSFER_PHASE_POST_READ) {
         encode_u32_le(&s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
@@ -711,7 +717,7 @@ static void transfer_async_process(void)
              transfer_data_at(s_transfer_index))) {
             transfer_async_finish((target_swd_ack_t)(
                 (uint8_t)ack | SWD_TRANSFER_MISMATCH));
-            return;
+            return false;
         }
         if (transfer_is_plain_ap_read(request)) {
             if (s_transfer_post_read) {
@@ -737,6 +743,25 @@ static void transfer_async_process(void)
     if ((s_transfer_index >= s_transfer_count) &&
         !s_transfer_post_read && !s_transfer_check_write) {
         transfer_async_finish(TARGET_SWD_ACK_OK);
+        return false;
+    }
+    return true;
+}
+
+static void transfer_async_process(void)
+{
+    uint32_t started_cycles = board_cycle_count();
+    uint32_t budget_cycles =
+        board_cycles_from_us(SWD_TUNNEL_BATCH_BUDGET_US);
+
+    /* 一个 block 内的相邻事务之间没有主机往返依赖，因此在一次主循环内
+     * 连续执行，只在时间预算耗尽时让出。这把每个字的成本从"两轮主循环"
+     * 降到"一次 SWD bit-bang"。 */
+    while (transfer_async_step()) {
+        if ((uint32_t)(board_cycle_count() - started_cycles) >=
+            budget_cycles) {
+            return;
+        }
     }
 }
 
@@ -804,6 +829,7 @@ void swd_tunnel_process(void)
             /* 启动后立刻在同一次调用内按预算执行，避免只为初始化状态机就
              * 白付一轮主循环调度。 */
             transfer_async_start();
+            transfer_async_process();
             return;
         }
         if (s_request[0] != SWD_TUNNEL_OP_PINS) {
