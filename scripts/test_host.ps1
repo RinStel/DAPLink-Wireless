@@ -25,7 +25,8 @@ param(
         "firmware-image",
         "boot-state",
         "boot-policy",
-        "boot-mailbox"
+        "boot-mailbox",
+        "dfu-flash"
     )]
     [string]$Name = "all",
     [string]$Compiler = "gcc"
@@ -42,6 +43,15 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "dfu-flash" = @{
+        label = "DFU flash transaction"
+        defines = @("BOOT_STATE_HOST_TEST")
+        includes = @("firmware/update", "firmware/bootloader")
+        sources = @("tests/dfu_flash_test.c",
+                    "firmware/bootloader/dfu_flash.c",
+                    "firmware/update/boot_state.c",
+                    "firmware/update/firmware_image.c")
+    }
     "boot-policy" = @{
         label = "Boot policy"
         includes = @("firmware/update", "firmware/bootloader")
