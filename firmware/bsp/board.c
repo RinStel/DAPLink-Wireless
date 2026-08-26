@@ -22,6 +22,8 @@
 #include "gd32f30x_gpio.h"
 #include "gd32f30x_rcu.h"
 
+/* 板级时序独立于 USB/无线驱动：SysTick 提供毫秒调度，DWT->CYCCNT 提供
+ * SWD 边沿时序。 */
 #define BOARD_DEVICE_ID1_ADDRESS 0x1FFFF7E8U
 #define BOARD_DEVICE_ID2_ADDRESS 0x1FFFF7ECU
 #define BOARD_DEVICE_ID3_ADDRESS 0x1FFFF7F0U
@@ -32,6 +34,7 @@ static uint8_t s_reset_cause;
 
 static void reset_cause_capture(void)
 {
+    /* 启动时只捕获一次并清除硬件标志，后续状态报告描述本次复位而不是旧原因。 */
     if (rcu_flag_get(RCU_FLAG_EPRST) == SET) {
         s_reset_cause |= BOARD_RESET_EXTERNAL;
     }
@@ -74,8 +77,6 @@ void board_init(void)
     output_write(BOARD_LED_G_PORT, BOARD_LED_G_PIN, true);
     output_write(BOARD_LED_B_PORT, BOARD_LED_B_PIN, true);
     output_write(BOARD_USB_PULLUP_PORT, BOARD_USB_PULLUP_PIN, false);
-    output_write(BOARD_TGT_5V_EN_PORT, BOARD_TGT_5V_EN_PIN, false);
-    output_write(BOARD_TGT_3V3_EN_PORT, BOARD_TGT_3V3_EN_PIN, false);
     output_write(BOARD_RF_NSS_PORT, BOARD_RF_NSS_PIN, true);
     output_write(BOARD_RF_RX_EN_PORT, BOARD_RF_RX_EN_PIN, false);
     output_write(BOARD_RF_NRESET_PORT, BOARD_RF_NRESET_PIN, false);
@@ -84,12 +85,13 @@ void board_init(void)
     gpio_init(GPIOC, GPIO_MODE_OUT_PP, GPIO_OSPEED_2MHZ,
               BOARD_LED_R_PIN | BOARD_LED_G_PIN | BOARD_LED_B_PIN);
     gpio_init(GPIOA, GPIO_MODE_OUT_PP, GPIO_OSPEED_2MHZ,
-              BOARD_TGT_5V_EN_PIN | BOARD_RF_NSS_PIN | BOARD_RF_RX_EN_PIN);
-    gpio_init(GPIOB, GPIO_MODE_OUT_PP, GPIO_OSPEED_2MHZ,
-              BOARD_USB_PULLUP_PIN | BOARD_TGT_3V3_EN_PIN |
-              BOARD_RF_NRESET_PIN | BOARD_RF_TX_EN_PIN);
+              BOARD_USB_PULLUP_PIN | BOARD_RF_NSS_PIN |
+              BOARD_RF_RX_EN_PIN | BOARD_RF_NRESET_PIN |
+              BOARD_RF_TX_EN_PIN);
 
     gpio_init(BOARD_KEY_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ, BOARD_KEY_PIN);
+    gpio_init(BOARD_USB_AUTO_EN_PORT, GPIO_MODE_IN_FLOATING,
+              GPIO_OSPEED_2MHZ, BOARD_USB_AUTO_EN_PIN);
     gpio_init(BOARD_RF_BUSY_PORT, GPIO_MODE_IPD, GPIO_OSPEED_2MHZ,
               BOARD_RF_BUSY_PIN);
     gpio_init(BOARD_RF_DIO1_PORT, GPIO_MODE_IPD, GPIO_OSPEED_2MHZ,
@@ -137,6 +139,7 @@ void board_delay_ms(uint32_t delay_ms)
 
 void board_delay_us(uint32_t delay_us)
 {
+    /* 该校准循环仅用于短板级延时；协议路径若需周期级稳定性，应使用 DWT。 */
     volatile uint32_t loops =
         (SystemCoreClock / 5000000U) * delay_us;
 
@@ -201,12 +204,8 @@ void board_usb_connect(bool connect)
     output_write(BOARD_USB_PULLUP_PORT, BOARD_USB_PULLUP_PIN, connect);
 }
 
-void board_target_5v_enable(bool enable)
+bool board_usb_power_present(void)
 {
-    output_write(BOARD_TGT_5V_EN_PORT, BOARD_TGT_5V_EN_PIN, enable);
-}
-
-void board_target_3v3_enable(bool enable)
-{
-    output_write(BOARD_TGT_3V3_EN_PORT, BOARD_TGT_3V3_EN_PIN, enable);
+    return gpio_input_bit_get(BOARD_USB_AUTO_EN_PORT,
+                              BOARD_USB_AUTO_EN_PIN) != RESET;
 }

@@ -3,6 +3,7 @@
 
 #include "device_config.h"
 
+/* 配置测试覆盖输入校验和派生网络标识。 */
 bool device_config_storage_load(device_config_t *config)
 {
     (void)config;
@@ -18,6 +19,14 @@ int main(void)
     config = device_config_get();
     assert(device_config_is_valid(config));
     assert(strcmp(config->sync_code, "DAPLINKWIRELESS1") == 0);
+    assert(config->device_mode == DEVICE_MODE_WIRED);
+    assert(device_config_equal(config, config));
+
+    invalid = *config;
+    invalid.rate_mode = DEVICE_RATE_FIXED;
+    assert(!device_config_equal(config, &invalid));
+    assert(!device_config_equal(NULL, config));
+    assert(!device_config_equal(config, NULL));
 
     invalid = *config;
     invalid.sync_code[0] = '-';
@@ -29,7 +38,7 @@ int main(void)
     device_config_button_cycle_rate();
     assert(device_config_get()->rate_mode == DEVICE_RATE_FIXED);
     device_config_button_cycle_mode();
-    assert(device_config_get()->device_mode == DEVICE_MODE_WIRELESS_SLAVE);
+    assert(device_config_get()->device_mode == DEVICE_MODE_WIRELESS_HOST);
 
     assert(device_config_apply("1234567890ABCDEF", DEVICE_MODE_WIRED,
                                DEVICE_RATE_AUTO,

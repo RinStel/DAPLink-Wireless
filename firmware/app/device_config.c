@@ -22,6 +22,8 @@
 
 #include "device_config_storage.h"
 
+/* 本模块在 RAM 中维护配置并派生无线标识；持久化是显式步骤，避免未完整
+ * 编辑的 USB 文件直接影响运行中的无线状态。 */
 #define DEFAULT_SYNC_CODE "DAPLINKWIRELESS1"
 
 static device_config_t s_config;
@@ -51,6 +53,7 @@ static bool sync_code_is_valid(const char *sync_code)
 
 static uint64_t fnv1a_64(const char *data, size_t length)
 {
+    /* FNV-1a 只提供确定性的对等端标识，不提供身份认证。 */
     uint64_t hash = UINT64_C(14695981039346656037);
     size_t index;
 
@@ -79,8 +82,9 @@ static void derive_network_values(void)
 
 void device_config_init(void)
 {
+    /* 先使用安全的有线默认值，再仅接受通过校验的 Flash 记录。 */
     (void)device_config_set_sync_code(DEFAULT_SYNC_CODE);
-    s_config.device_mode = DEVICE_MODE_WIRELESS_HOST;
+    s_config.device_mode = DEVICE_MODE_WIRED;
     s_config.rate_mode = DEVICE_RATE_AUTO;
     s_config.fixed_profile = SX128X_PROFILE_GFSK_1M;
     (void)device_config_storage_load(&s_config);
@@ -98,6 +102,16 @@ bool device_config_is_valid(const device_config_t *config)
            (config->device_mode <= DEVICE_MODE_WIRELESS_SLAVE) &&
            (config->rate_mode <= DEVICE_RATE_FIXED) &&
            (config->fixed_profile < SX128X_PROFILE_COUNT);
+}
+
+bool device_config_equal(const device_config_t *left,
+                         const device_config_t *right)
+{
+    return (left != NULL) && (right != NULL) &&
+           (strcmp(left->sync_code, right->sync_code) == 0) &&
+           (left->device_mode == right->device_mode) &&
+           (left->rate_mode == right->rate_mode) &&
+           (left->fixed_profile == right->fixed_profile);
 }
 
 bool device_config_set_sync_code(const char *sync_code)

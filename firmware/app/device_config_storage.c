@@ -31,6 +31,8 @@ extern bool device_config_storage_test_program(uint32_t address,
 #include "gd32f30x_fmc.h"
 #endif
 
+/* 两个 Flash 页交替作为日志槽位。最后才写入提交标记，因此擦除或编程
+ * 中途复位时，旧槽位仍保持有效。 */
 #define CONFIG_FLASH_MAGIC       0x44415043U
 #define CONFIG_FLASH_VERSION     1U
 #define CONFIG_FLASH_PAGE_SIZE   2048U
@@ -204,6 +206,7 @@ static bool config_equals_record(const device_config_t *config,
 static bool latest_record(persisted_config_t *record, uint32_t *address,
                           uint8_t *valid_count)
 {
+    /* 使用有符号差值比较代数，保证 32 位代数计数器回绕一次时仍可排序。 */
     persisted_config_t slot0;
     persisted_config_t slot1;
     uint32_t slot0_address = config_slot_address(0U);
@@ -268,6 +271,7 @@ bool device_config_storage_save(const device_config_t *config)
     uint8_t valid_count;
     size_t offset;
 
+    /* 先写入非活动槽并回读验证，成功后调用方才可把新配置视为持久状态。 */
     if (!device_config_is_valid(config)) {
         return false;
     }

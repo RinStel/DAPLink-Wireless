@@ -18,8 +18,10 @@
 #include "board.h"
 #include "device_config.h"
 #include "serial_bridge.h"
+#include "status_indicator.h"
 #include "usb_config_disk.h"
 
+/* 主循环顺序固定：先服务传输，再应用用户输入，最后更新 LED 并喂狗。 */
 #define BUTTON_DEBOUNCE_MS 30U
 #define BUTTON_LONG_PRESS_MS 2000U
 
@@ -32,6 +34,7 @@ static void configuration_button_process(void)
     bool pressed = board_key_pressed();
     uint32_t now = board_millis();
 
+    /* 在释放时完成消抖，从稳定边沿计算按键持续时间。 */
     if (pressed != raw_pressed) {
         raw_pressed = pressed;
         raw_changed_at = now;
@@ -70,7 +73,7 @@ static void configuration_button_process(void)
     }
 }
 
-static void update_alive_indicator(void)
+static bool alive_indicator_on(void)
 {
     static uint32_t last_toggle;
     static bool led_on;
@@ -79,33 +82,60 @@ static void update_alive_indicator(void)
     if ((uint32_t)(now - last_toggle) >= 500U) {
         last_toggle = now;
         led_on = !led_on;
-        board_led_set(BOARD_LED_GREEN, led_on);
     }
+
+    return led_on;
+}
+
+static void status_indicator_apply(status_indicator_leds_t leds)
+{
+    board_led_set(BOARD_LED_RED, leds.red);
+    board_led_set(BOARD_LED_GREEN, leds.green);
+    board_led_set(BOARD_LED_BLUE, leds.blue);
 }
 
 int main(void)
 {
+    bool activity;
     bool bridge_ready;
+    bool heartbeat_on;
+    bool initialization_failed;
+    bool runtime_error;
     bool watchdog_ready;
+    status_indicator_t indicator;
+    status_indicator_leds_t leds;
 
+    /* 指示灯分别报告桥接和看门狗初始化失败；看门狗仍监督主循环。 */
     board_init();
     board_led_set(BOARD_LED_BLUE, false);
-    bridge_ready = serial_bridge_init();
+    /* USB 配置盘快照依赖当前设备配置；先加载配置，但不在 USB 连接前
+     * 初始化可能阻塞的无线桥接。 */
+    device_config_init();
+    /* 先拉起 USB D+，避免无线收发器的同步初始化阻塞主机枚举。各 USB 类
+     * 在主机 SET_CONFIGURATION 时才初始化，因此此处不依赖 serial bridge。 */
     (void)usb_config_disk_init();
+    bridge_ready = serial_bridge_init();
+    /* Start watchdog AFTER all initialization to avoid timeout during init */
     watchdog_ready = board_watchdog_start();
-    board_led_set(BOARD_LED_RED, !bridge_ready || !watchdog_ready);
+    initialization_failed = !bridge_ready || !watchdog_ready;
+    status_indicator_init(&indicator, initialization_failed);
+    leds = status_indicator_update(&indicator, false, false, false,
+                                   board_millis());
+    status_indicator_apply(leds);
 
     for (;;) {
-        serial_bridge_process();
         usb_config_disk_process();
+        serial_bridge_process();
         configuration_button_process();
-        board_led_set(BOARD_LED_RED,
-                      !watchdog_ready || serial_bridge_has_error());
-        board_led_set(BOARD_LED_BLUE, serial_bridge_activity_led());
-
-        if (!serial_bridge_has_error()) {
-            update_alive_indicator();
+        runtime_error = serial_bridge_has_error();
+        activity = serial_bridge_activity_led();
+        heartbeat_on = false;
+        if (!initialization_failed && !runtime_error) {
+            heartbeat_on = alive_indicator_on();
         }
+        leds = status_indicator_update(&indicator, runtime_error, activity,
+                                       heartbeat_on, board_millis());
+        status_indicator_apply(leds);
         board_watchdog_feed();
     }
 }

@@ -22,8 +22,11 @@
 
 #include "device_config.h"
 
+/* 从双页日志读取最新的有效记录。 */
 bool device_config_storage_load(device_config_t *config);
+/* 原子保存；复位或掉电留下的不完整记录会被忽略。 */
 bool device_config_storage_save(const device_config_t *config);
+/* 比较当前配置与最新的持久化记录。 */
 bool device_config_storage_matches(const device_config_t *config);
 
 #endif

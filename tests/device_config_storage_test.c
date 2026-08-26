@@ -6,6 +6,7 @@
 #include "device_config.h"
 #include "device_config_storage.h"
 
+/* 使用模拟 Flash 注入撕裂写入，并在主机上验证日志恢复。 */
 #define FLASH_BASE      0x08000000U
 #define FLASH_SIZE      (256U * 1024U)
 #define FLASH_PAGE_SIZE 2048U
