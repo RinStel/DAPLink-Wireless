@@ -2,6 +2,7 @@
 build/
 dist/
 .tmp/
+.worktrees/
 
 # Locally retained vendor reference documents
 vendor/**/*.pdf
