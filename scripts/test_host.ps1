@@ -22,7 +22,8 @@ param(
         "usb-descriptor",
         "usb-disk",
         "startup-sequence",
-        "firmware-image"
+        "firmware-image",
+        "boot-state"
     )]
     [string]$Name = "all",
     [string]$Compiler = "gcc"
@@ -39,6 +40,14 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "boot-state" = @{
+        label = "Boot state journal"
+        defines = @("BOOT_STATE_HOST_TEST")
+        includes = @("firmware/update")
+        sources = @("tests/boot_state_test.c",
+                    "firmware/update/boot_state.c",
+                    "firmware/update/firmware_image.c")
+    }
     "firmware-image" = @{
         label = "Firmware image validation"
         includes = @("firmware/update")
