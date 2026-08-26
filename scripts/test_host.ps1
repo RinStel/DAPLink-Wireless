@@ -23,7 +23,9 @@ param(
         "usb-disk",
         "startup-sequence",
         "firmware-image",
-        "boot-state"
+        "boot-state",
+        "boot-policy",
+        "boot-mailbox"
     )]
     [string]$Name = "all",
     [string]$Compiler = "gcc"
@@ -40,6 +42,19 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "boot-policy" = @{
+        label = "Boot policy"
+        includes = @("firmware/update", "firmware/bootloader")
+        sources = @("tests/boot_policy_test.c",
+                    "firmware/bootloader/boot_policy.c")
+    }
+    "boot-mailbox" = @{
+        label = "Boot mailbox"
+        defines = @("BOOT_MAILBOX_HOST_TEST")
+        includes = @("firmware/update")
+        sources = @("tests/boot_mailbox_test.c",
+                    "firmware/update/boot_mailbox.c")
+    }
     "boot-state" = @{
         label = "Boot state journal"
         defines = @("BOOT_STATE_HOST_TEST")
