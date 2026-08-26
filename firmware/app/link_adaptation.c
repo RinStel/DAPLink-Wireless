@@ -17,6 +17,8 @@
  */
 #include "link_adaptation.h"
 
+/* Profile 按吞吐率从高到低、可靠性从低到高排列。投票和最小驻留时间
+ * 提供滞回，避免单次噪声 RSSI 触发切换。 */
 #define ADAPT_MIN_DWELL_MS          3000U
 #define ADAPT_UPGRADE_VOTES         4U
 #define ADAPT_DOWNGRADE_VOTES       2U

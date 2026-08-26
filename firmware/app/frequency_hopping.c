@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <string.h>
 
+/* 频道选择由 network/token 确定；惩罚值让重试避开最近失败的频道。 */
 #define HOP_FIRST_FREQUENCY_HZ 2405000000UL
 #define HOP_CHANNEL_SPACING_HZ     5000000UL
 #define HOP_BAD_CHANNEL_PENALTY          3U

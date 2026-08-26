@@ -21,11 +21,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* 线格式为 magic[2]、version、type、network/session/sequence（BE32），
+ * 第 16 字节为 payload_length，第 17 字节开始为 payload。 */
 #define RADIO_PROTOCOL_HEADER_SIZE  17U
-#define RADIO_PROTOCOL_PAYLOAD_SIZE 64U
-#define RADIO_PROTOCOL_VERSION       1U
+#define RADIO_PROTOCOL_PAYLOAD_SIZE 110U
+#define RADIO_PROTOCOL_VERSION       2U
+#define RADIO_PROTOCOL_ACK_PAYLOAD_SIZE 17U
 #define RADIO_PROTOCOL_FRAME_SIZE \
     (RADIO_PROTOCOL_HEADER_SIZE + RADIO_PROTOCOL_PAYLOAD_SIZE)
+
+#define RADIO_PROTOCOL_ACK_FLAG_HOP_VALID 0x01U
 
 typedef enum {
     RADIO_FRAME_DATA = 1,
@@ -38,13 +43,29 @@ typedef enum {
     RADIO_FRAME_SESSION_START,
     RADIO_FRAME_HOP_SWITCH,
     RADIO_FRAME_HOP_CONFIRM,
-    RADIO_FRAME_SWD_ABORT
+    RADIO_FRAME_SWD_ABORT,
+    RADIO_FRAME_SWD_BLOCK,
+    RADIO_FRAME_SWD_BLOCK_RESPONSE
 } radio_frame_type_t;
+
+typedef struct {
+    uint32_t ack_next;
+    uint32_t bitmap;
+    uint8_t flags;
+    uint8_t next_channel;
+    int16_t rssi_dbm_x2;
+    uint8_t error_status;
+    uint8_t tx_rx_status;
+    uint8_t sync_address_status;
+    uint8_t profile;
+    uint8_t current_channel;
+} radio_protocol_ack_t;
 
 typedef struct {
     radio_frame_type_t type;
     uint32_t session;
     uint32_t sequence;
+    /* 指向调用方的 frame；解析不会复制 payload。 */
     const uint8_t *payload;
     uint8_t payload_length;
 } radio_frame_view_t;
@@ -68,5 +89,9 @@ void radio_protocol_key_get(const radio_frame_view_t *view,
                             radio_frame_key_t *key);
 bool radio_protocol_key_equal(const radio_frame_key_t *left,
                               const radio_frame_key_t *right);
+bool radio_protocol_ack_encode(uint8_t *payload, uint8_t capacity,
+                               const radio_protocol_ack_t *ack);
+bool radio_protocol_ack_decode(const uint8_t *payload, uint8_t length,
+                               radio_protocol_ack_t *ack);
 
 #endif

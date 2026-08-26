@@ -24,6 +24,7 @@
 
 #include "radio_hal.h"
 
+/* SX128x FIFO 的 payload 上限；radio_protocol 帧小于此值。 */
 #define SX128X_MAX_PAYLOAD_SIZE 127U
 
 typedef enum {
@@ -46,6 +47,7 @@ typedef enum {
 typedef struct {
     uint8_t raw;
     sx128x_mode_t mode;
+    /* command_status 是 SPI 命令返回的芯片状态字节。 */
     uint8_t command_status;
 } sx128x_status_t;
 
@@ -59,6 +61,7 @@ typedef enum {
 } sx128x_profile_t;
 
 typedef struct {
+    /* RSSI 为有符号 dBm×2，单位为 0.5 dB。 */
     int16_t rssi_dbm_x2;
     uint8_t error_status;
     uint8_t tx_rx_status;
@@ -81,6 +84,8 @@ sx128x_result_t sx128x_set_frequency(uint32_t frequency_hz);
 sx128x_result_t sx128x_set_profile(sx128x_profile_t profile);
 sx128x_result_t sx128x_set_network_sync(const uint8_t sync_word[5]);
 sx128x_profile_t sx128x_get_profile(void);
+/* 最近一次包参数命中缓存的次数，用于运行时诊断和主机回归。 */
+uint32_t sx128x_packet_params_cache_hits(void);
 const char *sx128x_profile_name(sx128x_profile_t profile);
 sx128x_result_t sx128x_get_status(sx128x_status_t *status);
 sx128x_result_t sx128x_get_packet_status(sx128x_packet_status_t *status);
@@ -97,6 +102,7 @@ sx128x_result_t sx128x_get_rx_buffer_status(uint8_t *payload_length,
                                             uint8_t *buffer_offset);
 
 sx128x_result_t sx128x_start_tx(const uint8_t *data, size_t length);
+/* timeout_ms == 0 表示连续接收模式。 */
 sx128x_result_t sx128x_start_rx(uint16_t timeout_ms);
 sx128x_result_t sx128x_standby(void);
 

@@ -25,11 +25,13 @@
 
 typedef struct {
     bool initialized;
+    /* RSSI 为有符号 dBm×2，单位为 0.5 dB。 */
     int16_t rssi_ewma_dbm_x2;
     uint16_t success_count;
     uint16_t failure_count;
     uint8_t upgrade_votes;
     uint8_t downgrade_votes;
+    /* 使用 board_millis() 单位，并采用可处理回绕的时间差比较。 */
     uint32_t last_change_ms;
     sx128x_profile_t current_profile;
 } link_adaptation_t;

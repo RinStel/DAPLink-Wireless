@@ -2,6 +2,7 @@
 
 #include "link_adaptation.h"
 
+/* 推进 RSSI/失败投票，验证滞回和最小驻留时间。 */
 static sx128x_profile_t sample_successes(link_adaptation_t *state,
                                         int16_t rssi_dbm_x2,
                                         uint8_t count, uint32_t now_ms)

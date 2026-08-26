@@ -24,6 +24,7 @@
 #include "device_config.h"
 #include "radio_protocol.h"
 
+/* 所有服务函数由主循环轮询，不执行阻塞式 I/O。 */
 bool serial_service_init(void);
 void serial_service_process(void);
 bool serial_service_wired_process(void);
@@ -31,6 +32,7 @@ bool serial_service_deliver_data(device_mode_t mode,
                                  const uint8_t *payload, uint8_t length);
 bool serial_service_deliver_line_coding(const uint8_t *payload,
                                         uint8_t length);
+/* 如果有待发送项，则复制一项到调用方缓冲区。 */
 bool serial_service_source_take(device_mode_t mode,
                                 radio_frame_type_t *type,
                                 uint8_t *payload, uint8_t *length);

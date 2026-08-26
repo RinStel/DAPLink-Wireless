@@ -25,9 +25,8 @@
 #include "gd32f30x_gpio.h"
 #include "gd32f30x_rcu.h"
 
-#define TARGET_SWD_DEFAULT_CLOCK_HZ  100000U
-#define TARGET_SWD_MIN_CLOCK_HZ      10000U
-#define TARGET_SWD_MAX_CLOCK_HZ      1000000U
+/* SWD 是轮询式 bit-bang 引擎。主循环预算和取消标志限制 WAIT 重试；GPIO
+ * 方向切换只修改 PB12 位域。 */
 #define TARGET_SWD_DEFAULT_RETRIES   100U
 #define TARGET_SWD_MAX_WAIT_RETRIES  1024U
 #define TARGET_SWD_TRANSFER_BUDGET_MS 250U
@@ -40,21 +39,25 @@ static uint8_t s_turnaround = 1U;
 static bool s_data_phase;
 static volatile bool s_abort_requested;
 static target_swd_poll_hook_t s_poll_hook;
+static bool s_async_active;
+static uint8_t s_async_request;
+static uint32_t *s_async_data;
 
-static void clock_delay(void)
+static inline void clock_delay(void)
 {
-    uint32_t now = board_cycle_count();
+    uint32_t now = DWT->CYCCNT;
 
     if ((int32_t)(now - s_next_edge_cycle) >=
         (int32_t)s_half_period_cycles) {
         s_next_edge_cycle = now;
     }
-    while ((int32_t)(board_cycle_count() - s_next_edge_cycle) < 0) {
+    /* 有符号差值比较可处理 32 位 DWT 周期计数器回绕。 */
+    while ((int32_t)(DWT->CYCCNT - s_next_edge_cycle) < 0) {
     }
     s_next_edge_cycle += s_half_period_cycles;
 }
 
-static void swclk_write(bool high)
+static inline void swclk_write(bool high)
 {
     if (high) {
         GPIO_BOP(BOARD_TGT_SWCLK_PORT) = BOARD_TGT_SWCLK_PIN;
@@ -63,7 +66,7 @@ static void swclk_write(bool high)
     }
 }
 
-static void swdio_write(bool high)
+static inline void swdio_write(bool high)
 {
     if (high) {
         GPIO_BOP(BOARD_TGT_SWDIO_PORT) = BOARD_TGT_SWDIO_PIN;
@@ -72,41 +75,48 @@ static void swdio_write(bool high)
     }
 }
 
-static void swdio_output(void)
+static inline void swdio_output(void)
 {
-    gpio_init(BOARD_TGT_SWDIO_PORT, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ,
-              BOARD_TGT_SWDIO_PIN);
+    GPIO_CTL1(BOARD_TGT_SWDIO_PORT) = target_swd_swdio_ctl1_set_mode(
+        GPIO_CTL1(BOARD_TGT_SWDIO_PORT),
+        GPIO_MODE_OUT_PP | GPIO_OSPEED_50MHZ);
 }
 
-static void swdio_input(void)
+static inline void swdio_input(void)
 {
-    gpio_init(BOARD_TGT_SWDIO_PORT, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,
-              BOARD_TGT_SWDIO_PIN);
+    uint32_t reg;
+
+    GPIO_BOP(BOARD_TGT_SWDIO_PORT) = BOARD_TGT_SWDIO_PIN;
+    reg = target_swd_swdio_ctl1_set_mode(
+        GPIO_CTL1(BOARD_TGT_SWDIO_PORT), GPIO_MODE_IPU);
+    GPIO_CTL1(BOARD_TGT_SWDIO_PORT) = reg;
 }
 
-static void clock_cycle(void)
+static inline void clock_cycle(void)
 {
+    /* SWD 空闲为高电平。每一位先拉低 SWCLK；输入在低电平稳定期采样，
+     * 随后恢复高电平。时钟相位与 ARM CMSIS-DAP SW_DP.c 一致。 */
     clock_delay();
-    swclk_write(true);
+    swclk_write(TARGET_SWD_SAMPLE_CLOCK_HIGH);
     clock_delay();
-    swclk_write(false);
+    swclk_write(TARGET_SWD_CLOCK_IDLE_HIGH);
 }
 
-static void write_bit(uint32_t bit)
+static inline void write_bit(uint32_t bit)
 {
     swdio_write(bit != 0U);
     clock_cycle();
 }
 
-static uint32_t read_bit(void)
+static inline uint32_t read_bit(void)
 {
     uint32_t bit;
 
     clock_delay();
-    swclk_write(true);
+    swclk_write(TARGET_SWD_SAMPLE_CLOCK_HIGH);
     clock_delay();
     bit = GPIO_ISTAT(BOARD_TGT_SWDIO_PORT) & BOARD_TGT_SWDIO_PIN;
-    swclk_write(false);
+    swclk_write(TARGET_SWD_CLOCK_IDLE_HIGH);
     return bit != 0U ? 1U : 0U;
 }
 
@@ -154,6 +164,8 @@ static target_swd_ack_t transfer_once(uint8_t request, uint32_t *data)
     bool read = (request & 0x02U) != 0U;
     uint8_t index;
 
+    /* SWD 请求和数据字段均为 LSB-first。显式发送 turnaround 时钟，确保
+     * 读写方向切换符合协议。 */
     swdio_output();
     write_bits(request_packet(request), 8U);
     swdio_input();
@@ -223,23 +235,20 @@ static target_swd_ack_t transfer_once(uint8_t request, uint32_t *data)
 
 void target_swd_init(uint32_t clock_hz)
 {
-    if (clock_hz == 0U) {
-        clock_hz = TARGET_SWD_DEFAULT_CLOCK_HZ;
-    } else if (clock_hz < TARGET_SWD_MIN_CLOCK_HZ) {
-        clock_hz = TARGET_SWD_MIN_CLOCK_HZ;
-    } else if (clock_hz > TARGET_SWD_MAX_CLOCK_HZ) {
-        clock_hz = TARGET_SWD_MAX_CLOCK_HZ;
-    }
+    /* clock_hz 来自主机；转换为半周期 CPU 周期前先归一化，避免除零和
+     * 不安全频率。 */
+    clock_hz = target_swd_normalize_clock(clock_hz);
+    s_async_active = false;
 
     rcu_periph_clock_enable(RCU_GPIOB);
     s_half_period_cycles = SystemCoreClock / (clock_hz * 2U);
     if (s_half_period_cycles == 0U) {
         s_half_period_cycles = 1U;
     }
-    s_next_edge_cycle = board_cycle_count();
-    swclk_write(false);
+    s_next_edge_cycle = DWT->CYCCNT;
     gpio_init(BOARD_TGT_SWCLK_PORT, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ,
               BOARD_TGT_SWCLK_PIN);
+    swclk_write(TARGET_SWD_CLOCK_IDLE_HIGH);
     swdio_input();
 }
 
@@ -257,7 +266,7 @@ void target_swd_configure(uint8_t idle_cycles, uint16_t retry_count,
 
 void target_swd_disconnect(void)
 {
-    swclk_write(false);
+    swclk_write(TARGET_SWD_CLOCK_IDLE_HIGH);
     gpio_init(BOARD_TGT_SWCLK_PORT, GPIO_MODE_IN_FLOATING,
               GPIO_OSPEED_2MHZ, BOARD_TGT_SWCLK_PIN);
     swdio_input();
@@ -311,6 +320,49 @@ target_swd_ack_t target_swd_transfer(uint8_t request, uint32_t *data)
               TARGET_SWD_TRANSFER_BUDGET_MS) &&
              !s_abort_requested);
     return ack;
+}
+
+bool target_swd_transfer_begin(uint8_t request, uint32_t *data)
+{
+    if (s_async_active || s_abort_requested) {
+        return false;
+    }
+    s_async_request = request;
+    s_async_data = data;
+    s_async_active = true;
+    return true;
+}
+
+target_swd_poll_result_t target_swd_transfer_poll(target_swd_ack_t *ack)
+{
+    target_swd_ack_t result;
+
+    if (ack == NULL) {
+        return TARGET_SWD_POLL_ERROR;
+    }
+    if (!s_async_active) {
+        return TARGET_SWD_POLL_IDLE;
+    }
+    if (s_abort_requested) {
+        s_async_active = false;
+        *ack = TARGET_SWD_ACK_WAIT;
+        return TARGET_SWD_POLL_CANCELLED;
+    }
+    /* 每次 poll 只执行一个 SWD transfer。WAIT 重试交给上层状态机，避免
+     * 在单次主循环调用中长时间占用 USB、UART 和射频服务。 */
+    result = transfer_once(s_async_request, s_async_data);
+    s_async_active = false;
+    if (s_poll_hook != NULL) {
+        s_poll_hook();
+    }
+    *ack = result;
+    return TARGET_SWD_POLL_DONE;
+}
+
+void target_swd_transfer_cancel(void)
+{
+    s_abort_requested = true;
+    s_async_active = false;
 }
 
 void target_swd_poll_hook_set(target_swd_poll_hook_t hook)

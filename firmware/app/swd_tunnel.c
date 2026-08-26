@@ -23,15 +23,22 @@
 #include "board.h"
 #include "target_swd.h"
 
+/* 隧道线格式独立于 CMSIS-DAP。请求先校验，只有操作完成或确认取消后才
+ * 生成响应。 */
 #define SWD_TUNNEL_RESPONSE_HEADER_SIZE 4U
 #define SWD_TRANSFER_MATCH_VALUE        0x10U
 #define SWD_TRANSFER_MATCH_MASK         0x20U
 #define SWD_TRANSFER_MISMATCH           0x10U
+#define SWD_TRANSFER_APNDP              0x01U
+#define SWD_TRANSFER_RNW                0x02U
+#define SWD_DP_RDBUFF_READ              0x0EU
 #define SWD_TUNNEL_MAX_MATCH_RETRIES    128U
+#define SWD_TUNNEL_DEFAULT_WAIT_RETRIES 100U
+#define SWD_TUNNEL_MAX_WAIT_RETRIES     1024U
 #define SWD_TUNNEL_EXECUTION_BUDGET_MS 2500U
 #define SWD_TUNNEL_SEQUENCE_DATA_OFFSET 4U
 #define SWD_TUNNEL_MAX_SEQUENCE_BITS \
-    ((SWD_TUNNEL_MAX_PAYLOAD - SWD_TUNNEL_SEQUENCE_DATA_OFFSET) * 8U)
+    480U
 
 static uint8_t s_response[SWD_TUNNEL_MAX_PAYLOAD];
 static uint8_t s_response_length;
@@ -48,6 +55,24 @@ static bool s_cancelled;
 static bool s_response_ready;
 static uint32_t s_match_mask;
 static uint16_t s_match_retry;
+static uint16_t s_transfer_wait_retry_limit =
+    SWD_TUNNEL_DEFAULT_WAIT_RETRIES;
+static uint16_t s_transfer_wait_retries;
+static bool s_transfer_async;
+static bool s_transfer_poll_pending;
+static bool s_transfer_post_read;
+static bool s_transfer_check_write;
+typedef enum {
+    TRANSFER_PHASE_NORMAL = 0,
+    TRANSFER_PHASE_POST_READ,
+    TRANSFER_PHASE_WRITE_CHECK
+} transfer_phase_t;
+static transfer_phase_t s_transfer_phase;
+static uint8_t s_transfer_count;
+static uint8_t s_transfer_index;
+static uint8_t s_transfer_completed;
+static uint32_t s_transfer_started_at;
+static uint32_t s_transfer_data;
 
 static void encode_u32_le(uint8_t *output, uint32_t value)
 {
@@ -121,9 +146,13 @@ static bool request_valid(const uint8_t *request, uint8_t request_length)
 {
     uint8_t operation;
 
+    /* 每个请求格式为 [operation, transaction_id, 操作数据]；拒绝缺失或多余
+     * 字节，执行器不对长度进行猜测。 */
     if ((request == NULL) || (request_length < 2U)) {
         return false;
     }
+    /* 立即操作同步访问目标 SWD 引脚。Transfer 和 Sequence 仍检查执行预算，
+     * 防止长请求独占主循环。 */
     operation = request[0];
     if ((operation == SWD_TUNNEL_OP_CONNECT) ||
         (operation == SWD_TUNNEL_OP_DISCONNECT) ||
@@ -327,6 +356,149 @@ uint8_t swd_tunnel_encode_transfers(
     return (uint8_t)(3U + count * 5U);
 }
 
+static bool block_request_supported(uint8_t request)
+{
+    return !((((request & SWD_TRANSFER_MATCH_MASK) != 0U) &&
+              ((request & 0x02U) != 0U)) ||
+             (((request & SWD_TRANSFER_MATCH_VALUE) != 0U) &&
+              ((request & 0x02U) == 0U)));
+}
+
+uint8_t swd_tunnel_encode_block(
+    uint8_t transaction_id, const swd_tunnel_transfer_t *transfers,
+    uint8_t count, uint8_t *payload)
+{
+    uint8_t index;
+    uint8_t write_count = 0U;
+    uint16_t length;
+    uint16_t write_offset;
+
+    if ((payload == NULL) || (transfers == NULL) || (count == 0U) ||
+        (count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS)) {
+        return 0U;
+    }
+    length = (uint16_t)(2U + count);
+    for (index = 0U; index < count; ++index) {
+        uint8_t request = transfers[index].request & 0x3FU;
+
+        if (!block_request_supported(request)) {
+            return 0U;
+        }
+        if ((request & 0x02U) == 0U) {
+            ++write_count;
+        }
+    }
+    length = (uint16_t)(length + (uint16_t)write_count * 4U);
+    if (length > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) {
+        return 0U;
+    }
+    payload[0] = transaction_id;
+    payload[1] = count;
+    write_offset = (uint16_t)(2U + count);
+    for (index = 0U; index < count; ++index) {
+        uint8_t request = transfers[index].request & 0x3FU;
+
+        payload[2U + index] = request;
+        if ((request & 0x02U) == 0U) {
+            encode_u32_le(&payload[write_offset], transfers[index].data);
+            write_offset = (uint16_t)(write_offset + 4U);
+        }
+    }
+    return (uint8_t)length;
+}
+
+bool swd_tunnel_decode_block(const uint8_t *payload, uint8_t length,
+                             swd_tunnel_block_t *block)
+{
+    uint8_t index;
+    uint8_t write_count = 0U;
+    uint16_t write_offset;
+    uint16_t expected_length;
+
+    if ((payload == NULL) || (block == NULL) || (length < 3U) ||
+        (payload[1] == 0U) ||
+        (payload[1] > SWD_TUNNEL_MAX_BLOCK_TRANSFERS)) {
+        return false;
+    }
+    block->transaction_id = payload[0];
+    block->count = payload[1];
+    for (index = 0U; index < block->count; ++index) {
+        uint8_t request = payload[2U + index];
+
+        if (!block_request_supported(request)) {
+            return false;
+        }
+        block->transfers[index].request = request;
+        block->transfers[index].data = 0U;
+        if ((request & 0x02U) == 0U) {
+            ++write_count;
+        }
+    }
+    expected_length = (uint16_t)(2U + block->count +
+                                 (uint16_t)write_count * 4U);
+    if ((expected_length != length) ||
+        (expected_length > SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
+        return false;
+    }
+    write_offset = (uint16_t)(2U + block->count);
+    for (index = 0U; index < block->count; ++index) {
+        if ((block->transfers[index].request & 0x02U) == 0U) {
+            block->transfers[index].data = decode_u32_le(&payload[write_offset]);
+            write_offset = (uint16_t)(write_offset + 4U);
+        }
+    }
+    return true;
+}
+
+uint8_t swd_tunnel_encode_block_response(
+    uint8_t transaction_id, uint8_t completed, uint8_t ack,
+    const uint32_t *data, uint8_t read_count, uint8_t *payload)
+{
+    uint8_t index;
+    uint16_t length;
+
+    if ((payload == NULL) || (completed > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) ||
+        (read_count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) ||
+        ((read_count != 0U) && (data == NULL))) {
+        return 0U;
+    }
+    length = (uint16_t)(4U + (uint16_t)read_count * 4U);
+    if (length > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) {
+        return 0U;
+    }
+    payload[0] = transaction_id;
+    payload[1] = completed;
+    payload[2] = ack;
+    payload[3] = read_count;
+    for (index = 0U; index < read_count; ++index) {
+        encode_u32_le(&payload[4U + index * 4U], data[index]);
+    }
+    return (uint8_t)length;
+}
+
+bool swd_tunnel_decode_block_response(
+    const uint8_t *payload, uint8_t length,
+    swd_tunnel_block_response_t *response)
+{
+    uint8_t index;
+
+    if ((payload == NULL) || (response == NULL) || (length < 4U) ||
+        (payload[1] > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) ||
+        (payload[3] > SWD_TUNNEL_MAX_BLOCK_TRANSFERS) ||
+        (payload[3] > payload[1]) ||
+        (length != (uint8_t)(4U + payload[3] * 4U))) {
+        return false;
+    }
+    response->transaction_id = payload[0];
+    response->completed = payload[1];
+    response->ack = payload[2];
+    response->read_count = payload[3];
+    for (index = 0U; index < response->read_count; ++index) {
+        response->data[index] = decode_u32_le(&payload[4U + index * 4U]);
+    }
+    return true;
+}
+
 static bool execute_immediate(const uint8_t *request,
                               uint8_t request_length,
                               uint8_t *response,
@@ -366,6 +538,11 @@ static bool execute_immediate(const uint8_t *request,
             (uint16_t)request[5] | ((uint16_t)request[6] << 8);
         if (s_match_retry > SWD_TUNNEL_MAX_MATCH_RETRIES) {
             s_match_retry = SWD_TUNNEL_MAX_MATCH_RETRIES;
+        }
+        s_transfer_wait_retry_limit =
+            (uint16_t)request[3] | ((uint16_t)request[4] << 8);
+        if (s_transfer_wait_retry_limit > SWD_TUNNEL_MAX_WAIT_RETRIES) {
+            s_transfer_wait_retry_limit = SWD_TUNNEL_MAX_WAIT_RETRIES;
         }
         target_swd_configure(
             request[2],
@@ -517,8 +694,167 @@ static bool execute_immediate(const uint8_t *request,
     return true;
 }
 
+static void transfer_async_finish(target_swd_ack_t ack)
+{
+    s_response[0] = SWD_TUNNEL_OP_TRANSFER;
+    s_response[1] = s_request[1];
+    s_response[2] = s_transfer_completed;
+    s_response[3] = (uint8_t)ack;
+    s_response_length = (uint8_t)(SWD_TUNNEL_RESPONSE_HEADER_SIZE +
+                                  s_transfer_completed * 4U);
+    s_transfer_async = false;
+    s_transfer_poll_pending = false;
+    s_executing = false;
+    if (!s_cancelled) {
+        s_response_ready = true;
+    }
+}
+
+static void transfer_async_start(void)
+{
+    s_transfer_count = s_request[2];
+    s_transfer_index = 0U;
+    s_transfer_completed = 0U;
+    s_transfer_started_at = board_millis();
+    s_transfer_data = 0U;
+    s_transfer_wait_retries = 0U;
+    s_transfer_poll_pending = false;
+    s_transfer_post_read = false;
+    s_transfer_check_write = false;
+    s_transfer_phase = TRANSFER_PHASE_NORMAL;
+    s_transfer_async = true;
+    s_executing = true;
+    target_swd_abort_clear();
+}
+
+static bool transfer_is_plain_ap_read(uint8_t request)
+{
+    return (request & (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW |
+                       SWD_TRANSFER_MATCH_VALUE)) ==
+           (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW);
+}
+
+static void transfer_async_process(void)
+{
+    uint8_t offset = 0U;
+    uint8_t request = 0U;
+    target_swd_ack_t ack;
+    target_swd_poll_result_t poll_result;
+
+    if (s_cancelled || (uint32_t)(board_millis() - s_transfer_started_at) >=
+                           SWD_TUNNEL_EXECUTION_BUDGET_MS) {
+        target_swd_transfer_cancel();
+        transfer_async_finish(TARGET_SWD_ACK_WAIT);
+        return;
+    }
+    if (s_transfer_index < s_transfer_count) {
+        offset = (uint8_t)(3U + s_transfer_index * 5U);
+        request = s_request[offset];
+    }
+    if (!s_transfer_poll_pending) {
+        uint8_t physical_request;
+
+        if (s_transfer_post_read &&
+            ((s_transfer_index >= s_transfer_count) ||
+             !transfer_is_plain_ap_read(request))) {
+            s_transfer_phase = TRANSFER_PHASE_POST_READ;
+        } else if (s_transfer_index >= s_transfer_count) {
+            if (!s_transfer_check_write) {
+                transfer_async_finish(TARGET_SWD_ACK_OK);
+                return;
+            }
+            s_transfer_phase = TRANSFER_PHASE_WRITE_CHECK;
+        } else {
+            if ((request & SWD_TRANSFER_MATCH_MASK) != 0U) {
+                s_match_mask = decode_u32_le(&s_request[offset + 1U]);
+                encode_u32_le(
+                    &s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
+                                s_transfer_completed * 4U],
+                    0U);
+                ++s_transfer_index;
+                ++s_transfer_completed;
+                s_transfer_wait_retries = 0U;
+                return;
+            }
+            s_transfer_phase = TRANSFER_PHASE_NORMAL;
+        }
+        physical_request = s_transfer_phase == TRANSFER_PHASE_NORMAL
+                               ? request
+                               : SWD_DP_RDBUFF_READ;
+        s_transfer_data = s_transfer_phase == TRANSFER_PHASE_NORMAL
+                              ? decode_u32_le(&s_request[offset + 1U])
+                              : 0U;
+        if (!target_swd_transfer_begin(physical_request,
+                                       &s_transfer_data)) {
+            transfer_async_finish(TARGET_SWD_ACK_WAIT);
+            return;
+        }
+        s_transfer_poll_pending = true;
+        return;
+    }
+    poll_result = target_swd_transfer_poll(&ack);
+    if (poll_result == TARGET_SWD_POLL_BUSY) {
+        return;
+    }
+    s_transfer_poll_pending = false;
+    if ((poll_result == TARGET_SWD_POLL_DONE) &&
+        (ack == TARGET_SWD_ACK_WAIT) &&
+        (s_transfer_wait_retries < s_transfer_wait_retry_limit)) {
+        /* WAIT 只结束当前 SWD bit-bang 尝试；保留当前 index 和数据，在下次
+         * 主循环重新发起同一 transfer，避免一次轮询长时间独占 USB/无线。 */
+        ++s_transfer_wait_retries;
+        return;
+    }
+    if ((poll_result != TARGET_SWD_POLL_DONE) ||
+        (ack != TARGET_SWD_ACK_OK)) {
+        transfer_async_finish(ack);
+        return;
+    }
+    if (s_transfer_phase == TRANSFER_PHASE_POST_READ) {
+        encode_u32_le(&s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
+                                 (s_transfer_index - 1U) * 4U],
+                      s_transfer_data);
+        s_transfer_post_read = false;
+    } else if (s_transfer_phase == TRANSFER_PHASE_WRITE_CHECK) {
+        s_transfer_check_write = false;
+    } else {
+        if ((request & SWD_TRANSFER_MATCH_VALUE) != 0U &&
+            ((s_transfer_data & s_match_mask) !=
+             decode_u32_le(&s_request[offset + 1U]))) {
+            transfer_async_finish((target_swd_ack_t)(
+                (uint8_t)ack | SWD_TRANSFER_MISMATCH));
+            return;
+        }
+        if (transfer_is_plain_ap_read(request)) {
+            if (s_transfer_post_read) {
+                encode_u32_le(
+                    &s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
+                                (s_transfer_index - 1U) * 4U],
+                    s_transfer_data);
+            }
+            s_transfer_post_read = true;
+            s_transfer_check_write = false;
+        } else {
+            encode_u32_le(
+                &s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
+                            s_transfer_index * 4U],
+                s_transfer_data);
+            s_transfer_check_write =
+                (request & SWD_TRANSFER_RNW) == 0U;
+        }
+        ++s_transfer_index;
+        ++s_transfer_completed;
+    }
+    s_transfer_wait_retries = 0U;
+    if ((s_transfer_index >= s_transfer_count) &&
+        !s_transfer_post_read && !s_transfer_check_write) {
+        transfer_async_finish(TARGET_SWD_ACK_OK);
+    }
+}
+
 bool swd_tunnel_submit(const uint8_t *request, uint8_t request_length)
 {
+    /* 返回前复制请求；成功后调用方可以立即复用 USB 或无线缓冲区。 */
     if (!request_valid(request, request_length) ||
         s_pending || s_request_ready || s_executing ||
         s_response_ready) {
@@ -536,9 +872,18 @@ void swd_tunnel_process(void)
     uint32_t wait_us;
     uint8_t pins;
 
+    /* 每次调用只启动或推进一个操作，限制主循环延迟，并为取消长传输留出机会。 */
+    if (s_transfer_async) {
+        transfer_async_process();
+        return;
+    }
     if (s_request_ready) {
         s_request_ready = false;
         s_executing = true;
+        if (s_request[0] == SWD_TUNNEL_OP_TRANSFER) {
+            transfer_async_start();
+            return;
+        }
         if (s_request[0] != SWD_TUNNEL_OP_PINS) {
             bool executed =
                 execute_immediate(s_request, s_request_length,
@@ -598,11 +943,15 @@ void swd_tunnel_process(void)
 
 void swd_tunnel_cancel(void)
 {
+    /* 取消标志由后续 process 调用转换为确定性的响应。 */
     s_request_ready = false;
     s_pending = false;
+    s_transfer_async = false;
+    s_transfer_poll_pending = false;
     s_response_ready = false;
     s_cancelled = true;
     if (s_executing) {
+        target_swd_transfer_cancel();
         target_swd_abort_request();
     }
 }

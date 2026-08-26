@@ -23,6 +23,8 @@
 #include "gd32f30x_rcu.h"
 #include "gd32f30x_spi.h"
 
+/* SPI0 仅供 SX128x 使用。NSS 和射频前端由软件控制，因此每个事务都能
+ * 执行 BUSY 握手。 */
 #define RADIO_SPI                    SPI0
 #define RADIO_SPI_TIMEOUT_MS         10U
 #define RADIO_RESET_HOLD_MS          1U
@@ -37,6 +39,7 @@ static radio_result_t spi_transfer_byte(uint8_t tx_data,
                                         uint8_t *rx_data,
                                         uint32_t timeout_ms)
 {
+    /* TBE 和 RBNE 共用一个超时起点，避免外设卡死时无限延长事务。 */
     uint32_t start = board_millis();
 
     while (spi_i2s_flag_get(RADIO_SPI, SPI_FLAG_TBE) == RESET) {
@@ -126,6 +129,7 @@ radio_result_t radio_hal_transaction(const uint8_t *tx_data,
         return RADIO_RESULT_INVALID_ARGUMENT;
     }
 
+    /* SX128x 要求拉低 NSS 前以及释放 NSS 后都确认 BUSY 为低。 */
     result = radio_hal_wait_ready(timeout_ms);
     if (result != RADIO_RESULT_OK) {
         return result;

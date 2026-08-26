@@ -38,11 +38,13 @@ typedef enum {
 radio_result_t radio_hal_init(void);
 radio_result_t radio_hal_reset(uint32_t timeout_ms);
 radio_result_t radio_hal_wait_ready(uint32_t timeout_ms);
+/* 全双工 SPI 事务；仅写命令可将 rx_data 设为 NULL。 */
 radio_result_t radio_hal_transaction(const uint8_t *tx_data,
                                      uint8_t *rx_data,
                                      size_t length,
                                      uint32_t timeout_ms);
 
+/* 启动 RX 或 TX 前先选择外部射频开关状态。 */
 void radio_hal_frontend_set(radio_frontend_mode_t mode);
 bool radio_hal_irq_active(void);
 

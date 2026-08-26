@@ -23,6 +23,7 @@
 #include "swd_tunnel.h"
 
 typedef struct {
+    /* 计数器单调递增，直到 serial_bridge_init() 重置桥接器。 */
     uint32_t radio_recoveries;
     uint32_t swd_cancellations;
     uint32_t stale_swd_responses;
@@ -30,6 +31,7 @@ typedef struct {
     uint32_t radio_timeouts;
     uint32_t invalid_radio_frames;
     uint32_t peer_session_changes;
+    /* 远端 RSSI 为有符号 dBm×2，单位为 0.5 dB。 */
     int16_t remote_rssi_dbm_x2;
     uint8_t device_mode;
     uint8_t retries;
@@ -46,6 +48,7 @@ typedef struct {
     bool swd_request_active;
 } serial_bridge_status_t;
 
+/* SWD 操作异步完成，并通过 transaction_id 匹配响应。 */
 bool serial_bridge_init(void);
 bool serial_bridge_apply_config(void);
 void serial_bridge_process(void);
@@ -73,6 +76,7 @@ bool serial_bridge_swd_transfers(uint8_t transaction_id,
                                  const swd_tunnel_transfer_t *transfers,
                                  uint8_t count);
 void serial_bridge_swd_cancel(uint8_t transaction_id);
+/* 只有取消完成后才返回 true。 */
 bool serial_bridge_swd_cancel_complete(uint8_t transaction_id);
 bool serial_bridge_swd_response_take(swd_tunnel_response_t *response);
 void serial_bridge_status_get(serial_bridge_status_t *status);

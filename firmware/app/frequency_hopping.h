@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* 频道编号从 0 开始，并映射到固定的无线频率表。 */
 #define FREQUENCY_HOPPING_CHANNEL_COUNT 16U
 
 typedef struct {
@@ -36,6 +37,7 @@ uint8_t frequency_hopping_rendezvous(
 uint8_t frequency_hopping_select(const frequency_hopping_t *state,
                                  uint32_t token, uint8_t attempt,
                                  uint8_t excluded_channel);
+/* 返回 Hz；频道无效时返回 0。 */
 uint32_t frequency_hopping_frequency_hz(uint8_t channel);
 bool frequency_hopping_channel_valid(uint8_t channel);
 void frequency_hopping_record_success(frequency_hopping_t *state,

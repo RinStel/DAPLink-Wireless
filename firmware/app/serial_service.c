@@ -100,7 +100,7 @@ bool serial_service_wired_process(void)
         (void)target_uart_write(data, usb_length);
         activity = true;
     }
-    uart_length = cdc_acm_tx_ready()
+    uart_length = cdc_acm_tx_free() >= sizeof(data)
                       ? target_uart_read(data, sizeof(data))
                       : 0U;
     if (uart_length != 0U) {

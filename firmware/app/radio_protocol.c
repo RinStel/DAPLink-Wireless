@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <string.h>
 
+/* 固定布局头只通过 network_id 筛选，不提供加密或认证；无线 payload
+ * 仍是明文。 */
 #define RADIO_PROTOCOL_MAGIC_0 0x44U
 #define RADIO_PROTOCOL_MAGIC_1 0x53U
 static void encode_u32_be(uint8_t *output, uint32_t value)
@@ -41,6 +43,7 @@ static uint32_t decode_u32_be(const uint8_t *input)
 static uint32_t payload_digest(radio_frame_type_t type,
                                const uint8_t *payload, uint8_t length)
 {
+    /* 摘要只用于识别重复 payload，不是安全哈希。 */
     uint32_t hash = (2166136261U ^ (uint8_t)type) * 16777619U;
     uint8_t index;
 
@@ -56,6 +59,8 @@ uint8_t radio_protocol_build(uint8_t *frame, radio_frame_type_t type,
                              uint8_t payload_length)
 {
     if ((frame == NULL) ||
+        (type < RADIO_FRAME_DATA) ||
+        (type > RADIO_FRAME_SWD_BLOCK_RESPONSE) ||
         (payload_length > RADIO_PROTOCOL_PAYLOAD_SIZE) ||
         ((payload_length != 0U) && (payload == NULL))) {
         return 0U;
@@ -87,6 +92,8 @@ bool radio_protocol_parse(const uint8_t *frame, uint8_t frame_length,
         (frame[0] != RADIO_PROTOCOL_MAGIC_0) ||
         (frame[1] != RADIO_PROTOCOL_MAGIC_1) ||
         (frame[2] != RADIO_PROTOCOL_VERSION) ||
+        (frame[3] < RADIO_FRAME_DATA) ||
+        (frame[3] > RADIO_FRAME_SWD_BLOCK_RESPONSE) ||
         (decode_u32_be(&frame[4]) != network_id)) {
         return false;
     }
@@ -125,4 +132,48 @@ bool radio_protocol_key_equal(const radio_frame_key_t *left,
            (left->type == right->type) &&
            (left->payload_length == right->payload_length) &&
            (left->payload_digest == right->payload_digest);
+}
+
+bool radio_protocol_ack_encode(uint8_t *payload, uint8_t capacity,
+                               const radio_protocol_ack_t *ack)
+{
+    if ((payload == NULL) || (ack == NULL) ||
+        (capacity < RADIO_PROTOCOL_ACK_PAYLOAD_SIZE)) {
+        return false;
+    }
+    encode_u32_be(&payload[0], ack->ack_next);
+    encode_u32_be(&payload[4], ack->bitmap);
+    payload[8] = ack->flags;
+    payload[9] = ack->next_channel;
+    payload[10] = (uint8_t)((uint16_t)ack->rssi_dbm_x2 >> 8);
+    payload[11] = (uint8_t)ack->rssi_dbm_x2;
+    payload[12] = ack->error_status;
+    payload[13] = ack->tx_rx_status;
+    payload[14] = ack->sync_address_status;
+    payload[15] = ack->profile;
+    payload[16] = ack->current_channel;
+    return true;
+}
+
+bool radio_protocol_ack_decode(const uint8_t *payload, uint8_t length,
+                               radio_protocol_ack_t *ack)
+{
+    uint16_t rssi;
+
+    if ((payload == NULL) || (ack == NULL) ||
+        (length != RADIO_PROTOCOL_ACK_PAYLOAD_SIZE)) {
+        return false;
+    }
+    ack->ack_next = decode_u32_be(&payload[0]);
+    ack->bitmap = decode_u32_be(&payload[4]);
+    ack->flags = payload[8];
+    ack->next_channel = payload[9];
+    rssi = (uint16_t)payload[10] << 8 | payload[11];
+    ack->rssi_dbm_x2 = (int16_t)rssi;
+    ack->error_status = payload[12];
+    ack->tx_rx_status = payload[13];
+    ack->sync_address_status = payload[14];
+    ack->profile = payload[15];
+    ack->current_channel = payload[16];
+    return true;
 }
