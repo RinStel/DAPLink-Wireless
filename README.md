@@ -3,7 +3,7 @@
 基于两块相同硬件构成的无线 CMSIS-DAP v2 调试器。主控为 `GD32F303CCT6`，
 无线模块为基于 SX1281 的 `E28-2G4M20SX`。
 
-当前固件发布候选版本为 `0.8.0-rc.3`，无线链路协议为 `v1`。固件发布版本和
+当前固件发布候选版本为 `0.8.0-rc.3`，无线链路协议为 `v2-only`。固件发布版本和
 无线协议版本是独立标识；当前 EasyEDA 记录中的 `Board_V1.0` 与项目文档硬件
 版本 `v0.5` 的对应关系为 `待确认：`。
 
@@ -61,11 +61,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1
 
 - [项目手册](docs/project_manual.md)：产品架构、固件模块和 USB 配置。
 - [硬件手册](docs/hardware_manual.md)：原理图基线、GPIO 差异、上电和验收。
-- [无线手册](docs/wireless_manual.md)：协议 v1、跳频和射频验证。
+- [无线手册](docs/wireless_manual.md)：协议 v2-only、跳频和射频验证。
 - [开发与发布手册](docs/development_release_manual.md)：测试、依赖和发布门禁。
 - [U5 原理图连接记录](docs/schematic_u5_connections.md)：EasyEDA 网络事实与当前代码差异。
 - [变更记录](CHANGELOG.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
 
-原理图记录中的“当前代码状态”不代表固件已完成 GPIO 同步；硬件映射更新前，
-请按硬件手册中的 `待确认：` 项逐项校对。
+U5 GPIO 已按当前原理图同步到固件；真实板卡上的电平、时序和器件行为仍须按
+硬件手册中的上电与验收步骤实测。未由原理图、代码或测试证明的事项继续标记为
+`待确认：`。

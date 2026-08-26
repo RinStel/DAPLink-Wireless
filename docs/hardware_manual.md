@@ -31,25 +31,26 @@ EasyEDA 工程 `无线调试器`、`Board_V1.0`、原理图页面 `主控与射�
 | 功能 | 当前代码 GPIO | 原理图 GPIO/网络 | 状态 |
 | --- | --- | --- | --- |
 | RGB 红灯 | `PC13` | `PC13` / `STAT_LED_R` | 一致 |
-| RGB 绿灯 | `PC15` | `PC14` / `STAT_LED_G` | GPIO 不一致 |
-| RGB 蓝灯 | `PC14` | `PC15` / `STAT_LED_B` | GPIO 不一致 |
+| RGB 绿灯 | `PC14` | `PC14` / `STAT_LED_G` | 一致 |
+| RGB 蓝灯 | `PC15` | `PC15` / `STAT_LED_B` | 一致 |
 | 配置按键 | `PB9` | `PB8` / `MCU_KEYA`、`PB9` / `MCU_KEYB` | 当前只读取一个按键；`SW1` 功能为 `待确认：` |
-| USB D+ 上拉 | `PB8` | `PA8` / `USB_DP_PU` | 不一致 |
-| 目标供电使能 | `PA8`、`PB15` 两个独立接口 | `PA0` / `USB_AUTO_EN`，两个目标电源开关共用 | 有效电平和合并策略为 `待确认：` |
+| USB D+ 上拉 | `PA8` | `PA8` / `USB_DP_PU` | 一致 |
+| USB 供电有效检测 | `PA0` 输入 | `PA0` / `USB_AUTO_EN` | 一致；外部高有效输入，固件通过 `board_usb_power_present()` 读取 |
+| 目标供电控制 | 无独立 MCU 输出 | `PA0` / `USB_AUTO_EN`，两个目标电源开关共用 | 一致；由硬件 USB 供电有效信号控制 |
 | 射频 NSS/SPI | `PA4/PA5/PA6/PA7` | `PA4/PA5/PA6/PA7` | 一致 |
-| 射频 RX/TX 使能 | `PA0`、`PB13` | `PA1` / `RF_RX_EN`、`PA2` / `RF_TX_EN` | 不一致 |
-| 射频复位 | `PB12` | `PA3` / `RF_NRESET` | 不一致 |
-| 射频 BUSY | `PB11` | `PB1` / `RF_BUSY` | 不一致；当前 `PB11` 在原理图中为 `NC` |
-| 射频 DIO1 | `PB10` | `PB5` / `RF_DIO1` | 不一致 |
+| 射频 RX/TX 使能 | `PA1`、`PA2` | `PA1` / `RF_RX_EN`、`PA2` / `RF_TX_EN` | 一致 |
+| 射频复位 | `PA3` | `PA3` / `RF_NRESET` | 一致 |
+| 射频 BUSY | `PB1` | `PB1` / `RF_BUSY` | 一致 |
+| 射频 DIO1 | `PB5` | `PB5` / `RF_DIO1` | 一致 |
 | 射频 DIO2/DIO3 | 当前 HAL 只使用 DIO1 | `PB0` / `RF_DIO2`、`PB10` / `RF_DIO3` | 是否需固件处理为 `待确认：` |
-| 目标 SWCLK | `PB6` | `PB13` / `TGT_SWCLK_C` | 不一致；`PB6` 是 `TGT_TDI_C` |
-| 目标 SWDIO | `PB7` | `PB12` / `TGT_SWDIO_C` | 不一致；`PB7` 是 `TGT_TDO` |
-| 目标 NRST | `PB4` | `PB15` / `TGT_NRST_C` | 不一致；`PB4` 为 `NC` |
-| 目标 BOOT | `PB5` | `PB14` / `TGT_BOOT_C` | 不一致；`PB5` 是 `RF_DIO1` |
+| 目标 SWCLK | `PB13` | `PB13` / `TGT_SWCLK_C` | 一致 |
+| 目标 SWDIO | `PB12` | `PB12` / `TGT_SWDIO_C` | 一致 |
+| 目标 NRST | `PB15` | `PB15` / `TGT_NRST_C` | 一致 |
+| 目标 BOOT | `PB14` | `PB14` / `TGT_BOOT_C` | 一致；当前仍只配置为输入 |
 | 目标 USART TX/RX | `PA9/PA10` | `PA9/PA10` / `TGT_TXD_C/TGT_RXD` | GPIO 一致，TX 侧经过串联电阻 |
 
-这些差异只表示文档核对结果，不表示固件已经完成硬件同步。本次文档整理和
-无线协议 v1 调整不修改当前代码中的板级 GPIO 宏。
+U5 GPIO 已按原理图同步到 `board_pins.h`、板级初始化和 USB 配置；
+`SW1`、`RF_DIO2/DIO3` 以及目标 BOOT 的产品行为仍未扩展。
 
 ## 投板与上电前风险
 
@@ -62,9 +63,10 @@ EasyEDA 工程 `无线调试器`、`Board_V1.0`、原理图页面 `主控与射�
    输出能力均为 `待确认：`。
 3. USB 必须得到准确 48 MHz 时钟。8 MHz HXTAL 到 120 MHz 系统时钟的配置不能
    只通过 CPU 运行验证。
-4. `USB_AUTO_EN` 同时连接 `U_TGT_SW1.EN`、`U_TGT_SW2.EN` 和 `Q2` 栅极。两个
-   目标电源开关共用一个 MCU 网络；有效电平、目标供电策略和固件接口合并方式
-   必须先确认。
+4. `USB_AUTO_EN` 同时连接 `U_TGT_SW1.EN`、`U_TGT_SW2.EN` 和 `Q2` 栅极。
+   EasyEDA 元件资料标明 `SY6280AAAC.EN` 为高电平有效；PA0 必须保持输入，
+   固件不得把 `USB_AUTO_EN` 当作目标供电输出使用。首次上电仍必须实测 USB 供电有效与目标
+   两路输出的对应关系。
 5. `TGT_3V3` 既可作为本板 `TPS2116` 输入，又可由本板 `SY6280AAAC` 输出。
    外部目标已供电时不得直接打开目标 3.3 V 输出；仅靠软件防互灌不充分。
 6. `D3` 从 `TGT_5V` 指向 `5V_SYS`，可能允许目标 5 V 给本板供电。必须核算
@@ -79,16 +81,15 @@ EasyEDA 工程 `无线调试器`、`Board_V1.0`、原理图页面 `主控与射�
 下面是当前代码在 `board_init()` 中表达的启动意图，不是对当前 EasyEDA GPIO
 映射已经正确的声明：
 
-- `BOARD_TGT_5V_EN = 0`
-- `BOARD_TGT_3V3_EN = 0`
 - `BOARD_RF_TX_EN = 0`
 - `BOARD_RF_RX_EN = 0`
 - `BOARD_RF_NSS = 1`
 - `BOARD_RF_NRESET = 0`，初始化完成后释放
 - `BOARD_USB_PULLUP = 0`，USB 协议栈就绪后连接
+- `BOARD_USB_AUTO_EN` 配置为浮空输入，固件通过 `board_usb_power_present()` 读取
 - 目标 `NRST` 与 `BOOT` 默认高阻输入
 
-在 U5 引脚映射确认并更新固件前，不得把这些宏名直接当作原理图网络名使用。
+目标供电没有独立 MCU 输出接口，由 `USB_AUTO_EN` 硬件网络控制；固件不得写入 PA0。
 
 ## 首次上电流程
 
@@ -143,7 +144,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\hardware_smoke.ps1 `
 ## 待确认项汇总
 
 - `Board_V1.0`/`V1.0` 与项目硬件版本 `v0.5` 的对应关系。
-- `USB_AUTO_EN` 的有效电平、两个目标电源开关的行为及固件接口策略。
 - `SW1`、`SW2` 的产品功能分工。
 - `RF_DIO2`、`RF_DIO3` 是否需要固件处理。
 - 目标接口 `TGT_SWDIO_C`、`TGT_SWCLK_C`、`TGT_NRST_C`、`TGT_BOOT_C` 的串联电阻方向和有效电平。

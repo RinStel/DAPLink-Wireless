@@ -6,7 +6,7 @@
 
 - [项目手册：产品、固件与 USB 配置](project_manual.md)
 - [硬件手册：原理图、板级安全与验收](hardware_manual.md)
-- [无线手册：协议 v1、跳频与射频验证](wireless_manual.md)
+- [无线手册：协议 v2-only、跳频与射频验证](wireless_manual.md)
 - [开发与发布手册：验证、依赖和门禁](development_release_manual.md)
 
 ## 原理图与版本事实
@@ -22,7 +22,8 @@
 ## 版本说明
 
 固件发布版本由 `FIRMWARE_VERSION_STRING` 表示，当前为 `0.8.0-rc.3`；无线帧
-协议版本由 `RADIO_PROTOCOL_VERSION` 表示，当前为 `1U`。两者不可互换。
+协议版本由 `RADIO_PROTOCOL_VERSION` 表示，当前为 `2U`；接收端拒绝 v1 和未知版本，
+发送端不保留 v1 路径。两者不可互换。
 
 第三方 CMSIS-DAP 文档位于 `Third-Party/CMSIS-DAP/**`，属于上游资料，不在本项目
 手册中重写。

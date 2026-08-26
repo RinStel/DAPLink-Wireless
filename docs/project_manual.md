@@ -7,8 +7,8 @@ DAPLink-Wireless 使用两块相同硬件构成无线 CMSIS-DAP v2 调试器。�
 无线主机和无线从机三种设备模式，并通过 USB 同时提供 CMSIS-DAP v2 Bulk、
 CDC ACM 虚拟串口和 MSC 配置磁盘。
 
-当前状态：固件发布候选版本为 `0.8.0-rc.3`，无线链路协议版本为 `v1`，
-无线帧头偏移 2 的协议字段为 `01`。`FIRMWARE_VERSION_STRING` 与
+当前状态：固件发布候选版本为 `0.8.0-rc.3`，无线链路协议版本为 `v2`，
+无线帧头偏移 2 的协议字段为 `02`。`FIRMWARE_VERSION_STRING` 与
 `RADIO_PROTOCOL_VERSION` 是独立标识。现有发布文档使用硬件版本 `v0.5`；
 EasyEDA 当前读取到的 `Board_V1.0` 与项目文档中的 `v0.5` 对应关系为 `待确认：`。
 
@@ -67,8 +67,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1
 | `WIRELESS_SLAVE` | 无线请求在本板执行 SWD，并与目标 USART0 双向透传 |
 
 主机拥有无线链路的控制权，从机不主动修改 profile、频道或串口参数。串口数据
-和行参数使用递增序号、ACK、超时重传和重复帧抑制；单帧最多承载 64 字节，
-当前采用停等模型。
+和行参数使用递增序号、ACK、超时重传和重复帧抑制；无线单帧最多承载 110 字节。
+`DATA` 使用四槽窗口和累计 ACK，SWD Transfer 使用压缩 `SWD_BLOCK`。
 
 PC 打开 CDC ACM 虚拟串口时发送 `SET_LINE_CODING`。有线模式立即将参数应用到
 USART0；无线主机通过可靠控制帧同步给无线从机。因此不使用自动波特率探测。
@@ -89,7 +89,7 @@ USART0；无线主机通过可靠控制帧同步给无线从机。因此不使�
 | 链路 | `link_adaptation.c` | RSSI EWMA、升降速投票和驻留时间 |
 | 链路 | `frequency_hopping.c` | 频道表、同步码派生排列和坏频道惩罚 |
 | 驱动 | `sx128x.c`、`radio_hal.c` | SX1281 命令及 SPI/GPIO |
-| 驱动 | `target_uart.c` | 目标串口环形缓冲区 |
+| 驱动 | `target_uart.c`、`target_uart_ring.c` | USART0 DMA 环形缓冲区和 TX 分段 |
 | 驱动 | `target_swd.c` | SWCLK、SWDIO 和 NRST 时序 |
 | 板级 | `board.c` | GPIO、SysTick、DWT 时基和设备 ID |
 | USB | `usb_composite.c` | MSC、CDC、CMSIS-DAP v2 组合描述符 |
@@ -106,8 +106,8 @@ USB FS 枚举为 MSC + CDC ACM + CMSIS-DAP 组合设备：
 - CMSIS-DAP v2 使用接口 3 的 64 字节 Bulk OUT/IN 端点。
 - USB OUT 使用背压，保证只有一个未完成 DAP 命令。
 - Windows 8 及以上可通过 Microsoft OS 1.0 WCID 自动为 v2 接口绑定 WinUSB。
-- USBFS PMA 为 512 字节；EP0 使用 8 字节最大包，CDC 数据端点使用 16 字节包，
-  DAP v2 端点保持 64 字节。
+- USBFS PMA 为 512 字节；MSC bulk 端点使用 16 字节包，CDC 数据端点和 DAP v2
+  端点使用 64 字节包。MSC 配置盘仍然保留，逻辑介质块仍为 512 字节。
 
 量产前必须替换 GD32 示例 VID/PID，并验证 Windows、Linux 和 macOS 的枚举、
 休眠恢复和安全弹出行为。
@@ -160,6 +160,6 @@ JTAG、SWO 和时间戳尚未实现，能力位不会声明这些功能。`DAP_T
 ## 相关手册
 
 - [硬件手册](hardware_manual.md)：原理图基线、当前 GPIO 差异、上电与实机验收。
-- [无线手册](wireless_manual.md)：协议 v1、profile、跳频和射频冒烟测试。
+- [无线手册](wireless_manual.md)：协议 v2、窗口 ACK、profile、跳频和射频冒烟测试。
 - [开发与发布手册](development_release_manual.md)：测试、依赖、发布门禁和 CMSIS-DAP 验证。
 - [U5 原理图连接记录](schematic_u5_connections.md)：EasyEDA 读取的完整网络事实。

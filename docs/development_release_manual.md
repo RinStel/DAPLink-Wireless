@@ -10,12 +10,25 @@
 - P3 无线 DAP：命令批处理、去重、取消、超时、串口旁路和动态跳频。
 - P4 软件产品化：设备模式、同步码、MSC 配置、Flash 存储和发布门禁。
 
-当前固件发布候选版本为 `0.8.0-rc.3`，无线链路协议版本为 `v1`。软件构建和
+当前固件发布候选版本为 `0.8.0-rc.3`，无线链路协议版本为 `v2`。软件构建和
 主机协议测试已自动化；真实硬件验证、USB VID/PID、生产测试和跨平台兼容性仍
 属于发布前工作。
 
 目标端执行完整 DAP 命令或批量 SWD 序列，主机端只传输请求和结果，不跨无线
-链路传输逐 bit 时序。无线链路延迟高于本地 SWD，当前设计优先保证顺序和正确性。
+链路传输逐 bit 时序。无线 `DATA` 使用四槽窗口，SWD Transfer 使用压缩块；无线
+链路延迟和硬件吞吐仍需真实双板验收。
+
+### USB 枚举启动时序（2026-08-26）
+
+已定位一个会造成“连接电脑后较长时间识别不出 DAP”的软件原因。旧版 `main()` 先
+调用 `serial_bridge_init()`；在无线模式下，`serial_bridge_init()` 会同步初始化 SX1281，
+USB D+ 上拉因此延迟到无线初始化完成后才建立。当前启动顺序为：`board_init()`、
+`usb_config_disk_init()`、`serial_bridge_init()`。这样 USB 可以先进入枚举，随后再完成
+无线桥接初始化。
+
+本次修改只证明源码中的启动顺序已调整。仍必须在真实板卡上测量上电到
+`VID_28E9&PID_1290` 出现的时间，并分别排除 USB-C CC、电缆、D+/D−、R19 上拉、48 MHz
+USB 时钟和供电问题。
 
 ## 主机测试与软件门禁
 
@@ -48,10 +61,34 @@ Release manifest、产物哈希、源码树指纹和连续 Release 构建的一�
 Release manifest 必须同时记录：
 
 - `version = 0.8.0-rc.3`；
-- `radio_protocol = 1`；
+- `radio_protocol = 2`；
 - `hardware = v0.5`（与 EasyEDA `Board_V1.0` 的对应关系为 `待确认：`）；
 - 构建器版本、源码树 SHA-256、源码文件数、Flash/RAM 占用和函数最大栈占用；
 - ELF、HEX、BIN 的字节数和 SHA-256。
+
+## 吞吐优化跟进门禁
+
+2026-08-26 的性能审查将软件修复和实机验收分开处理。当前 Release 软件门禁只证明
+协议、缓冲边界、构建产物和静态栈限制满足检查，不能证明实际烧录速度或无线吞吐。
+USB 枚举启动顺序的源码修复已完成；Windows 实际识别延迟仍属于实机门禁。
+
+软件阶段按以下顺序执行，并在每阶段运行对应失败回归、聚焦测试和全量主机测试：
+
+1. CDC TX 软件队列与 UART-to-CDC 源端容量保护；
+2. 无线 DATA 窗口满背压；
+3. CMSIS-DAP SWD chunk 合并；
+4. 异步 SWD WAIT 重试；
+5. SWD DWT 读取和 SX1281 packet-params 热路径优化。
+
+实机阶段必须另外记录：
+
+- SWCLK 100 kHz、1 MHz、2 MHz、4 MHz 的实际频率、占空比和烧录/校验时间；
+- 无线 64/110 字节负载、window=1/4、立即/延迟 ACK 下的 goodput、重传率和 CRC 错误；
+- UART 3 Mbps 双向 PRBS 的端到端 CRC、DMA/软件环溢出和 USB 重置计数；
+- 长 SWD WAIT、Abort、目标读回 CRC 和双板跳频恢复结果。
+
+在未取得硬件证据时，主机测试、GCC 构建和 Release manifest 不得作为 SWCLK、烧录速度、
+无线 goodput、UART/CDC 完整性或 USB 跨平台枚举的替代验收。
 
 ## CMSIS-DAP v2 验证
 

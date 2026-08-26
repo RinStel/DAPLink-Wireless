@@ -1,6 +1,6 @@
 # 项目手册合并与无线协议 v1 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]` / `- [ ]`) syntax for tracking.
 
 **Goal:** 将项目自有文档合并为少量项目手册，删除已归并的旧文档，并将无线帧协议版本从 `4` 调整为 `1`。
 
@@ -28,7 +28,7 @@
 - Consumes: `radio_protocol_build()`、`radio_protocol_parse()` 和 `RADIO_PROTOCOL_VERSION`。
 - Produces: 能证明帧头第 2 字节必须为 `1`，且旧版本 `4` 被拒绝的主机回归测试。
 
-- [ ] **Step 1: 修改测试期望值**
+- [x] **Step 1: 修改测试期望值**
 
 在第一次构造帧后增加固定协议版本断言，并把非法版本用例改为显式的 `4U`：
 
@@ -44,7 +44,7 @@ frame[2] = RADIO_PROTOCOL_VERSION;
 
 保留后续长度、负载、`SWD_ABORT` 和跳频测试。
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run:
 
@@ -67,7 +67,7 @@ Expected: 测试因当前 `RADIO_PROTOCOL_VERSION` 为 `4U`，在 `assert(frame[
 - Consumes: Task 1 的版本断言和旧版本拒绝用例。
 - Produces: 构造帧和解析帧都以 `RADIO_PROTOCOL_VERSION == 1U` 为准。
 
-- [ ] **Step 1: 修改唯一协议版本常量**
+- [x] **Step 1: 修改唯一协议版本常量**
 
 将：
 
@@ -83,7 +83,7 @@ Expected: 测试因当前 `RADIO_PROTOCOL_VERSION` 为 `4U`，在 `assert(frame[
 
 不在 `radio_protocol.c` 增加第二个版本常量；`radio_protocol.c` 已经通过同一宏写入和验证帧头。
 
-- [ ] **Step 2: 运行协议回归测试确认 GREEN**
+- [x] **Step 2: 运行协议回归测试确认 GREEN**
 
 Run:
 
@@ -109,23 +109,23 @@ Expected: Radio protocol 测试退出码为 0。
 - Consumes: 现有 13 个待删除文档、`docs/schematic_u5_connections.md`、当前固件源码和脚本中的实际名称。
 - Produces: 四本手册及根目录/`docs/` 导航，所有现有有效事实均有唯一归属。
 
-- [ ] **Step 1: 编写 `project_manual.md`**
+- [x] **Step 1: 编写 `project_manual.md`**
 
 合并产品架构、固件模块、USB 配置盘和开发路线。保留设备模式、串口参数同步、USB MSC/CDC/CMSIS-DAP 组合、PMA/端点约束、`CONFIG.TXT` 格式、Flash 双槽事务、按键行为、VID/PID 限制和当前软件状态。`FIRMWARE_VERSION_STRING` 与无线协议版本分别说明。
 
-- [ ] **Step 2: 编写 `hardware_manual.md`**
+- [x] **Step 2: 编写 `hardware_manual.md`**
 
 合并硬件审查和硬件验收，包含核心器件、板级安全态、首次上电、硬件风险、pyOCD 冒烟命令和发布签核项目。将旧的目标 SWD/供电/射频 GPIO 描述改为“当前代码状态”，引用 `schematic_u5_connections.md` 的原理图基线，并保留 `USB_AUTO_EN`、按键、DIO2/DIO3、串联电阻方向等 `待确认：` 项。
 
-- [ ] **Step 3: 编写 `wireless_manual.md`**
+- [x] **Step 3: 编写 `wireless_manual.md`**
 
 合并 `radio_protocol_v4.md`、`frequency_hopping.md` 和 `radio_bringup.md`。协议章节标题和帧头偏移 2 统一写作 v1/`01`；保留帧格式、ACK 七字节指标、`SWD_ABORT`、profile 切换、16 频道跳频、恢复时序、RSSI 阈值、SX1281 参数、SPI 引脚和双板冒烟步骤。
 
-- [ ] **Step 4: 编写 `development_release_manual.md`**
+- [x] **Step 4: 编写 `development_release_manual.md`**
 
 合并开发任务、CMSIS-DAP 验证、发布检查、厂商依赖。保留已完成/未完成状态、测试命令、真实目标验证要求、Release manifest、依赖锁、CMSIS-DAP 固定提交、厂商快照、许可证和 VID/PID 发布前置条件；将英文任务改为准确中文，但保留代码标识符和命令原文。
 
-- [ ] **Step 5: 更新两个文档入口**
+- [x] **Step 5: 更新两个文档入口**
 
 让 `README.md` 只保留项目定位、快速构建/测试/打包和手册入口；让 `docs/README.md` 按四本手册、原理图记录、变更记录和第三方声明列出链接，并说明协议版本与固件发布版本的区别。
 
@@ -143,15 +143,15 @@ Expected: Radio protocol 测试退出码为 0。
 - Consumes: Task 2 的 `RADIO_PROTOCOL_VERSION == 1U` 和 Task 3 的新手册路径。
 - Produces: 发布包使用新手册，`Unreleased` 记录本次未发布协议调整，历史版本不被重写。
 
-- [ ] **Step 1: 替换发布包文档路径**
+- [x] **Step 1: 替换发布包文档路径**
 
 将 `scripts/package_release.ps1` 中的 `radio_protocol_v4.md` 替换为 `wireless_manual.md`，并把待发布的旧手册路径替换为四本新手册和 `schematic_u5_connections.md`。
 
-- [ ] **Step 2: 更新 `CHANGELOG.md` 的 `Unreleased`**
+- [x] **Step 2: 更新 `CHANGELOG.md` 的 `Unreleased`**
 
 增加两项事实记录：项目文档合并为四本手册；在产品发布前将无线协议帧版本定为 `1`。由于 `0.8.0-rc.3` 尚未公开发布，候选版本条目同步记录协议 v1。
 
-- [ ] **Step 3: 扫描旧引用**
+- [x] **Step 3: 扫描旧引用**
 
 Run:
 
@@ -184,15 +184,15 @@ Expected: 只允许设计说明中的删除清单和迁移说明保留旧路径�
 - Consumes: Task 3 的四本手册、Task 4 的引用扫描。
 - Produces: 只保留有独立责任的项目文档，不删除原理图记录、变更记录、第三方声明或许可证。
 
-- [ ] **Step 1: 复核删除目标**
+- [x] **Step 1: 复核删除目标**
 
 确认每个目标路径存在，且 `docs/project_manual.md`、`docs/hardware_manual.md`、`docs/wireless_manual.md`、`docs/development_release_manual.md` 已覆盖每个旧文件的有效内容。
 
-- [ ] **Step 2: 用补丁删除目标文件**
+- [x] **Step 2: 用补丁删除目标文件**
 
 使用 `apply_patch` 的 `Delete File` 操作删除清单中的 13 个文件，不使用宽泛递归删除。
 
-- [ ] **Step 3: 检查文档链接和差异**
+- [x] **Step 3: 检查文档链接和差异**
 
 Run:
 
@@ -215,7 +215,7 @@ Expected: 没有空白错误；每个项目文档链接指向现存路径；`doc
 - Consumes: 全部前置任务。
 - Produces: 文档、协议常量、测试、Release manifest 和构建产物的一致性证据。
 
-- [ ] **Step 1: 运行 cste-zh 检查**
+- [x] **Step 1: 运行 cste-zh 检查**
 
 先执行：
 
@@ -225,7 +225,7 @@ python C:\Users\YSCha\.codex\skills\cste-zh\scripts\cste_lint.py --help
 
 根据脚本实际参数，对根目录项目文档和 `docs/` 手册执行检查；上游 `Third-Party/CMSIS-DAP/**` 不纳入项目中文术语检查。
 
-- [ ] **Step 2: 运行完整主机测试**
+- [x] **Step 2: 运行完整主机测试**
 
 ```powershell
 .\scripts\test_host.ps1 -Name all
@@ -233,7 +233,7 @@ python C:\Users\YSCha\.codex\skills\cste-zh\scripts\cste_lint.py --help
 
 Expected: 所有已注册主机测试退出码为 0。
 
-- [ ] **Step 3: 运行 GCC Debug/Release 构建**
+- [x] **Step 3: 运行 GCC Debug/Release 构建**
 
 ```powershell
 .\scripts\build_gcc.ps1 -Configuration Debug
@@ -242,15 +242,17 @@ Expected: 所有已注册主机测试退出码为 0。
 
 Expected: 构建成功；Release `build/gcc/release/manifest.json` 的 `radio_protocol` 为 `1`，`version` 仍为 `0.8.0-rc.3`。
 
-- [ ] **Step 4: 运行发布验证（可用 Keil 时）**
+- [x] **Step 4: 运行发布验证（可用 Keil 时）**
 
 ```powershell
 .\scripts\verify_release.ps1 -SkipKeil
 ```
 
+本轮实际使用 `-SkipKeil` 完成发布验证；Keil 构建、USB 主机枚举、真实 CMSIS-DAP 调试和双板无线收发仍未执行。
+
 Expected: 源码树、依赖、主机测试、GCC 构建、Release manifest 和可重复构建检查全部通过；若环境缺少 Arm GCC 或其他工具，记录实际阻塞，不把未运行结果写成通过。
 
-- [ ] **Step 5: 最终检查协议和旧文档引用**
+- [x] **Step 5: 最终检查协议和旧文档引用**
 
 ```powershell
 rg -n --glob '!Third-Party/**' --glob '!build/**' --glob '!dist/**' 'RADIO_PROTOCOL_VERSION\s+1U|协议版本 `01`|无线链路协议 v1|FIRMWARE_VERSION_STRING|radio_protocol_v4|协议 v4|协议v4' .
