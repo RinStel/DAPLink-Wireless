@@ -21,7 +21,8 @@ param(
         "sx1281",
         "usb-descriptor",
         "usb-disk",
-        "startup-sequence"
+        "startup-sequence",
+        "firmware-image"
     )]
     [string]$Name = "all",
     [string]$Compiler = "gcc"
@@ -38,6 +39,12 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "firmware-image" = @{
+        label = "Firmware image validation"
+        includes = @("firmware/update")
+        sources = @("tests/firmware_image_test.c",
+                    "firmware/update/firmware_image.c")
+    }
     "board-pins" = @{
         label = "Board pin mapping"
         defines = @("GD32F30X_HD")
