@@ -7,7 +7,7 @@ DAPLink-Wireless 使用两块相同硬件构成无线 CMSIS-DAP v2 调试器。�
 无线主机和无线从机三种设备模式，并通过 USB 同时提供 CMSIS-DAP v2 Bulk、
 CDC ACM 虚拟串口和 MSC 配置磁盘。
 
-当前状态：固件发布候选版本为 `0.8.0-rc.3`，无线链路协议版本为 `v2`，
+当前状态：固件版本为 `1.0.0`，无线链路协议版本为 `v2`，
 无线帧头偏移 2 的协议字段为 `02`。`FIRMWARE_VERSION_STRING` 与
 `RADIO_PROTOCOL_VERSION` 是独立标识。现有发布文档使用硬件版本 `v0.5`；
 EasyEDA 当前读取到的 `Board_V1.0` 与项目文档中的 `v0.5` 对应关系为 `待确认：`。
@@ -38,9 +38,10 @@ GD32F30x V3.0.3 保存在 `vendor/` 下的官方快照中，不使用 submodule�
 powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 ```
 
-`verify_release.ps1` 检查源码树、依赖、主机测试、GCC Debug/Release 构建、产物哈希、
-栈占用和连续 Release 构建的一致性。安装 Keil 后还会构建
-`firmware/project.uvprojx`；Keil 零错误、零警告构建仍由本地发布流程负责。
+`verify_release.ps1` 检查源码树、依赖、主机测试、Python 工具测试、GCC Debug/Release
+构建和固件分区。发布主链路固定使用 GCC 交叉工具链。
+根目录 `CMakeLists.txt` 定义 Bootloader、Slot A 和 Slot B 三个固定地址目标，
+`CMakePresets.json` 提供 Debug/Release 配置；CMake 是唯一固件构建入口。
 
 只构建 GCC 固件：
 
@@ -49,14 +50,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 .\scripts\build_gcc.ps1 -Configuration Release
 ```
 
-生成发布候选包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1
-```
-
-构建输出位于 `build/gcc`，发布包位于 `dist`。GCC 和 Keil 的中间文件不得写入
-`firmware/`。
+构建输出位于 `build/gcc`，中间文件不得写入 `firmware/`。
 
 ## 设备模式与数据流
 
@@ -137,6 +131,27 @@ CRC32 和提交标记。写入失败或格式错误时继续使用上一份有�
 
 `STATUS.TXT` 显示当前固件版本、上次配置应用结果和复位原因。配置成功或失败
 后设备都会重新枚举配置盘；失败时 `CONFIG.TXT` 恢复为仍在使用的旧配置。
+
+### USB DFU 与 A/B 试运行
+
+应用通过 MSC 配置盘中的一次性精确字段进入 DFU：
+
+```text
+ENTER_DFU=1
+```
+
+只有整份 `CONFIG.TXT` 写入并完成 MSC 安静窗口后才接受该动作；字段不会写入设备
+配置记录。应用断开 USB 并复位，Bootloader 以 `VID:PID=28E9:1291` 枚举独立 DFU
+接口（`0xFE/0x01/0x02`），仅允许 DNLOAD，UPLOAD 被禁用。正常模式要求版本代码
+严格大于已确认版本；上电按键恢复模式允许同版本和降级。两种模式都检查
+`GD32F303CC`、目标槽地址、长度、向量表、头部 CRC32 和镜像 CRC32，并且只擦写非
+活动槽。
+
+下载成功后在最终 GETSTATUS 响应完成后绿灯保持约 500 ms，随后自动复位并试运行
+候选槽。应用首次完整主循环只调用一次确认；连续三次复位仍未确认时 Bootloader
+回退到旧确认槽。等待、写入和错误状态没有空闲超时，实践中可拔插 USB 重新枚举。
+STAT_LED 逻辑状态为：蓝色等待/写入、青色校验、绿色成功/试运行、红色错误、红蓝
+交替回退。
 
 板载按键通过同一双槽 Flash 事务修改配置：短按依次切换自动速率和固定速率，
 长按 2 秒依次切换 `WIRED`、`WIRELESS_HOST`、`WIRELESS_SLAVE`。SWD 事务进行

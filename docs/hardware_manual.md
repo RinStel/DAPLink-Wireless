@@ -30,9 +30,9 @@ EasyEDA 工程 `无线调试器`、`Board_V1.0`、原理图页面 `主控与射�
 
 | 功能 | 当前代码 GPIO | 原理图 GPIO/网络 | 状态 |
 | --- | --- | --- | --- |
-| RGB 红灯 | `PC13` | `PC13` / `STAT_LED_R` | 一致 |
-| RGB 绿灯 | `PC14` | `PC14` / `STAT_LED_G` | 一致 |
-| RGB 蓝灯 | `PC15` | `PC15` / `STAT_LED_B` | 一致 |
+| RGB 红灯 | `PC14` | `PC14` / `STAT_LED_R` | 原理图与实板单色测试一致 |
+| RGB 绿灯 | `PC15` | `PC15` / `STAT_LED_G` | 原理图与实板单色测试一致 |
+| RGB 蓝灯 | `PC13` | `PC13` / `STAT_LED_B` | 原理图与实板单色测试一致 |
 | 配置按键 | `PB9` | `PB8` / `MCU_KEYA`、`PB9` / `MCU_KEYB` | 当前只读取一个按键；`SW1` 功能为 `待确认：` |
 | USB D+ 上拉 | `PA8` | `PA8` / `USB_DP_PU` | 一致 |
 | USB 供电有效检测 | `PA0` 输入 | `PA0` / `USB_AUTO_EN` | 一致；外部高有效输入，固件通过 `board_usb_power_present()` 读取 |
@@ -58,9 +58,10 @@ U5 GPIO 已按原理图同步到 `board_pins.h`、板级初始化和 USB 配置�
 
 1. `LED1` 的极性、符号引脚定义、封装方向和实际连接。旧审查记录中的 `K`/`A`
    连接按常规定义可能造成反向偏置，不能只根据符号名称判断。
-2. RGB LED 的低电平灌电流能力。旧审查记录使用了 `R18/R26` 和 470 Ohm 的描述，
-   而当前 U5 直接网络连接的是 `R27/R28/R29`；电阻值、LED 极性和 PC13-PC15
-   输出能力均为 `待确认：`。
+2. 2026-08-27 实板低电平单色测试确认 `PC13=蓝`、`PC14=红`、`PC15=绿`。
+   更新后的 EasyEDA 网络名 `STAT_LED_B/R/G` 与实际发光颜色一致。旧审查记录使用了
+   `R18/R26` 和 470 Ohm 的描述，而当前 U5 直接网络连接的是 `R27/R28/R29`；
+   电阻值和各通道电流仍为 `待确认：`。
 3. USB 必须得到准确 48 MHz 时钟。8 MHz HXTAL 到 120 MHz 系统时钟的配置不能
    只通过 CPU 运行验证。
 4. `USB_AUTO_EN` 同时连接 `U_TGT_SW1.EN`、`U_TGT_SW2.EN` 和 `Q2` 栅极。
@@ -104,11 +105,39 @@ U5 GPIO 已按原理图同步到 `board_pins.h`、板级初始化和 USB 配置�
 
 ## 硬件冒烟与发布验收
 
+### USB DFU 实板验收补充
+
+首次部署使用 pyOCD，按 Bootloader、Slot A、Factory State 分区执行 sector erase、
+Program 和 Verify，不写 Slot B 或 `0x0803F000-0x0803FFFF` 配置页。禁止 full-chip
+erase。当前 pyOCD 使用 `stm32f103rc` 兼容目标；这不是 GD32 型号认证，必须记录
+实际回读结果。
+
+```powershell
+pyocd list --probes
+powershell -ExecutionPolicy Bypass -File .\scripts\flash_pyocd.ps1 `
+    -Artifact .\build\gcc\release\daplink_factory.hex `
+    -Probe <unique-id> -Target stm32f103rc -Connect under-reset `
+    -Frequency 1M -Erase sector
+```
+
+CLion Release profile 的 `flash_factory`、`flash_bootloader`、`flash_slot_a` 和
+`flash_slot_b` 是非默认烧录目标；普通 Build 不会触发 Flash 写入。没有 `NRST` 连接
+时，将 `-Connect under-reset` 改为 `-Connect halt`，并降低频率后重新验证。
+连接应用时把
+`CONFIG.TXT` 写成精确的 `ENTER_DFU=1` 并安全弹出，记录 `28E9:1290` 断开、
+`28E9:1291` DFU 枚举、蓝灯等待/写入、青色校验、绿色约 500 ms 和自动复位。拔线或
+掉电覆盖擦除、写入、Manifest 三个阶段，确认旧槽仍可启动；烧录不确认的候选镜像，
+确认三次复位后红蓝交替并回退。最后按住恢复键上电，确认无有效应用时仍能进入
+恢复 DFU，并验证恢复模式可降级但不能绕过型号、地址、长度、向量表或 CRC32 检查。
+
+上述项目必须记录板卡序列号、工具版本、VID/PID、LED 实际颜色和 Flash 地址；没有
+真实 USB、掉电、按键和 LED 记录时，只能标记为软件完成，不能标记为硬件发布通过。
+
 ### 准备
 
 - 两块无线调试器，分别配置为 `WIRELESS_HOST` 和 `WIRELESS_SLAVE`，同步码一致。
 - 一块已知正常的 Cortex-M 目标板。
-- 主机安装 pyOCD、OpenOCD、Keil 和 Arm CMSIS-DAP Validation。
+- 主机安装 pyOCD、OpenOCD 和 Arm CMSIS-DAP Validation。
 - 首次测试关闭调试器目标供电，由目标板独立供电并共地。
 
 ### pyOCD 冒烟
@@ -129,7 +158,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\hardware_smoke.ps1 `
 
 1. 有线模式完成连接、下载、复位、断点、单步及内存读写。
 2. 无线模式重复相同步骤，并覆盖全部 GFSK/FLRC profile。
-3. 使用 Keil、pyOCD、OpenOCD 和 Arm Validation 分别验证。
+3. 使用 pyOCD、OpenOCD 和 Arm Validation 分别验证。
 4. 目标持续返回 WAIT 时发送 Abort，记录最坏响应时间。
 5. 屏蔽当前频道，确认两台设备在不同起始频道下重新会合。
 6. 通信过程中切换速率，确认无重复写、无错误复位、无会话串台。
