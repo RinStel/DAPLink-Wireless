@@ -14,11 +14,11 @@
 
 /* 编译期板级契约：目标、无线、LED 和 USB 引脚不得重叠。 */
 _Static_assert(BOARD_LED_R_PORT == GPIOC, "LED R port changed");
-_Static_assert(BOARD_LED_R_PIN == GPIO_PIN_13, "LED R pin changed");
+_Static_assert(BOARD_LED_R_PIN == GPIO_PIN_14, "LED R pin must be PC14");
 _Static_assert(BOARD_LED_G_PORT == GPIOC, "LED G port changed");
 _Static_assert(BOARD_LED_G_PIN == GPIO_PIN_15, "LED G pin must be PC15");
 _Static_assert(BOARD_LED_B_PORT == GPIOC, "LED B port changed");
-_Static_assert(BOARD_LED_B_PIN == GPIO_PIN_14, "LED B pin must be PC14");
+_Static_assert(BOARD_LED_B_PIN == GPIO_PIN_13, "LED B pin must be PC13");
 _Static_assert(BOARD_USB_AUTO_EN_PORT == GPIOA, "USB_AUTO_EN must be PA0");
 _Static_assert(BOARD_USB_AUTO_EN_PIN == GPIO_PIN_0, "USB_AUTO_EN must be PA0");
 _Static_assert(BOARD_USB_PULLUP_PORT == GPIOA, "USB pull-up must be PA8");

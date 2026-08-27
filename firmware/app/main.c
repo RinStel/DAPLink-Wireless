@@ -16,7 +16,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "board.h"
+#include "boot_mailbox.h"
+#include "boot_state.h"
+#include "boot_confirm_once.h"
 #include "device_config.h"
+#include "gd32f30x_misc.h"
 #include "serial_bridge.h"
 #include "status_indicator.h"
 #include "usb_config_disk.h"
@@ -102,6 +106,7 @@ int main(void)
     bool initialization_failed;
     bool runtime_error;
     bool watchdog_ready;
+    boot_confirm_once_t boot_confirm_guard = {false, false};
     status_indicator_t indicator;
     status_indicator_leds_t leds;
 
@@ -125,9 +130,23 @@ int main(void)
 
     for (;;) {
         usb_config_disk_process();
+        if (usb_config_disk_dfu_reset_pending()) {
+            boot_mailbox_request_dfu();
+            board_usb_connect(false);
+            board_delay_ms(100U);
+            NVIC_SystemReset();
+        }
         serial_bridge_process();
         configuration_button_process();
         runtime_error = serial_bridge_has_error();
+        if (!initialization_failed && !runtime_error) {
+            if (!boot_confirm_once(
+                    &boot_confirm_guard,
+                    (firmware_slot_t)FIRMWARE_LINK_SLOT,
+                    boot_state_confirm)) {
+                runtime_error = true;
+            }
+        }
         activity = serial_bridge_activity_led();
         heartbeat_on = false;
         if (!initialization_failed && !runtime_error) {

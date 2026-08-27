@@ -10,7 +10,7 @@
 - P3 无线 DAP：命令批处理、去重、取消、超时、串口旁路和动态跳频。
 - P4 软件产品化：设备模式、同步码、MSC 配置、Flash 存储和发布门禁。
 
-当前固件发布候选版本为 `0.8.0-rc.3`，无线链路协议版本为 `v2`。软件构建和
+当前固件版本为 `1.0.0`，无线链路协议版本为 `v2`。软件构建和
 主机协议测试已自动化；真实硬件验证、USB VID/PID、生产测试和跨平台兼容性仍
 属于发布前工作。
 
@@ -50,21 +50,71 @@ USB 时钟和供电问题。
 软件发布门禁：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1 -SkipKeil
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 ```
 
-发布门禁脚本依次检查 Git 索引和源码树、依赖锁、主机测试、GCC Debug/Release 构建、
-Release manifest、产物哈希、源码树指纹和连续 Release 构建的一致性。可用 Keil
-时不使用 `-SkipKeil`，以额外验证 `firmware/project.uvprojx` 的 0 Error、0 Warning
-结果。
+发布门禁脚本依次检查 Git 索引和源码树、依赖锁、主机测试、Python 工具测试、
+GCC Debug/Release 构建和固件分区。发布产物固定由 CMake 驱动的 GCC 交叉工具链
+生成。CLion 可直接打开仓库根目录，选择 `debug` 或 `release` profile；命令行等价于
+`cmake --preset release` 和 `cmake --build --preset release`。
 
-Release manifest 必须同时记录：
+### USB DFU 发布与首次部署
 
-- `version = 0.8.0-rc.3`；
-- `radio_protocol = 2`；
-- `hardware = v0.5`（与 EasyEDA `Board_V1.0` 的对应关系为 `待确认：`）；
-- 构建器版本、源码树 SHA-256、源码文件数、Flash/RAM 占用和函数最大栈占用；
-- ELF、HEX、BIN 的字节数和 SHA-256。
+Release 构建在各分目标子目录生成 `daplink_bootloader.*`、`daplink_slot_a.*` 和
+`daplink_slot_b.*`，并在 Release 根目录生成 `daplink_wireless.dwup` 和
+`daplink_factory.hex`。factory HEX
+只合并 Bootloader、Slot A 和已确认的初始 Boot 状态记录，不包含配置页
+`0x0803F000-0x0803FFFF`。GCC/CMake 产物用于发布和在线升级；首次 SWD 部署使用
+`scripts/flash_pyocd.ps1`，按 Bootloader、Slot A 和 Factory State 分区写入。脚本
+默认使用 pyOCD 的 `stm32f103rc` 兼容目标、`under-reset`、`1M` 和 `sector erase`，
+不接受未列入发布契约的文件名。不要用整片擦除替代按区域烧录。
+
+CLion 的 Release CMake profile 提供非默认目标 `flash_factory`、`flash_bootloader`、
+`flash_slot_a` 和 `flash_slot_b`。需要多个探针时，在 profile 中设置
+`-DPYOCD_PROBE=<unique-id>`；也可以直接运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\flash_pyocd.ps1 `
+    -Artifact .\build\gcc\release\daplink_factory.hex `
+    -Probe <unique-id> -Target stm32f103rc -Connect under-reset `
+    -Frequency 1M -Erase sector
+```
+
+`-WhatIf` 只打印命令，不连接探针或写入 Flash。pyOCD 兼容目标不是 GD32 型号认证；
+必须记录完整的编程、校验、回读和复位结果。
+
+### 当前实板状态（2026-08-26）
+
+ST-LINK GDB Server 会在供应商校验阶段拒绝 GD32F303；pyOCD 目前只完成兼容目标的
+连接和读内存验证。当前板上是部分写入状态，首次烧录和 USB DFU 实板验收仍未通过；
+应完成 pyOCD 分区烧录、校验和回读后，再继续 USB 枚举、LED 和回退验收。
+
+正常更新流程如下：
+
+1. 安装 `dfu-util`，在应用配置盘的完整 `CONFIG.TXT` 中写入精确字段
+   `ENTER_DFU=1`，然后安全弹出；升级工具也可通过 `--volume` 自动完成该写入。
+2. 等待应用卷消失和 `28E9:1291` DFU 设备重新枚举；工具轮询
+   `dfu-util --list`，按接口字符串中的非活动槽、地址和版本选择 `.dwup` 镜像。
+3. 运行 `dfu-util --device 28e9:1291 --alt 0 --download <payload>`。设备端在
+   Manifest 状态响应完成后自动复位，主机等待超时不改变设备端无空闲超时规则。
+
+Windows 8 及以上系统通过 Bootloader 的 Microsoft OS 1.0 WCID 描述符自动为
+`28E9:1291` 绑定 WinUSB。正常升级不得要求用户使用 Zadig。如果系统在升级
+Bootloader 前已经缓存 Code 28 设备记录，则删除该设备记录并重新插拔一次 USB，
+再用 `dfu-util --device 28e9:1291 --list` 验证驱动绑定。Zadig 仅用于开发排障，
+不得替换应用模式 `28E9:1290`、ST-Link 或其他 USB 设备的驱动。
+
+可选的一步式主机工具命令为：
+
+```powershell
+python tools/daplink_updater.py build/gcc/release/daplink_wireless.dwup --volume E:\
+```
+
+恢复键上电进入恢复 DFU，是拔插 USB 后的救砖入口；恢复模式允许同版本/降级，但仍
+   强制型号、地址、长度、向量表和 CRC32 校验。试运行候选连续三次未确认会回退，
+   LED 依次提示蓝色等待/写入、青色校验、绿色成功、红色错误和红蓝交替回退。
+   配置页保留、自动复位和 LED 颜色必须在真实板上验收，主机回归和 GCC 构建不能
+   替代 USB 枚举、拔线掉电、三次回退或按键入口的实板证据。
 
 ## 吞吐优化跟进门禁
 
@@ -124,9 +174,8 @@ CMSIS-DAP 主机测试覆盖产品版本和能力查询、填充后的 64 字节
 1. 将两台设备配置为 `WIRELESS_HOST` 和 `WIRELESS_SLAVE`，同步码一致。
 2. 从机连接 Cortex-M 目标，首先使用 100 kHz SWD 时钟。
 3. 主机连接 Windows，确认 CMSIS-DAP v2 接口通过 WCID 绑定 WinUSB。
-4. 使用 Keil、pyOCD 和 OpenOCD 执行连接、内存读写、下载、复位、断点和单步。
-5. 打开 `Third-Party/CMSIS-DAP/Firmware/Validation/MDK5/Validation.uvprojx`，
-   运行 Arm 官方测试。
+4. 使用 pyOCD 和 OpenOCD 执行连接、内存读写、下载、复位、断点和单步。
+5. 使用 Arm 官方 CMSIS-DAP Validation 工具运行目标测试。
 
 官方 Validation 必须连接真实目标 MCU，不能由本机协议测试替代。
 
@@ -184,7 +233,7 @@ CMSIS-DAP 主机测试覆盖产品版本和能力查询、填充后的 64 字节
 - [x] 保护厂商 USB standard-request dispatch table。
 - [x] 拒绝非法 USB standard-request interface 和 endpoint 索引。
 - [x] 校验 CDC 控制请求的方向、recipient、value 和 length。
-- [x] 将 GCC/Keil 输出置于 `firmware/` 外，并在构建前后强制源码树洁净。
+- [x] 将 GCC/CMake 输出置于 `firmware/` 外，并在构建前后强制源码树洁净。
 
 ## 发布检查清单
 
@@ -192,7 +241,6 @@ CMSIS-DAP 主机测试覆盖产品版本和能力查询、填充后的 64 字节
 
 - [x] CMSIS-DAP v2、无线协议、SX1281 驱动、配置、链路自适应、USB 描述符和磁盘测试通过。
 - [x] GCC Debug 与 Release 使用 `-Wall -Wextra -Werror` 构建通过。
-- [x] Keil 工程零错误、零警告构建通过。
 - [x] Flash、RAM 和单函数静态栈占用设有构建门限。
 - [x] 配置 Flash 双副本通过写入中断、提交失败、CRC 损坏和回退模拟。
 - [x] ELF、HEX、BIN 及 SHA-256 清单可重复生成。
@@ -202,7 +250,7 @@ CMSIS-DAP 主机测试覆盖产品版本和能力查询、填充后的 64 字节
 - [x] CMSIS-DAP 由固定提交的 Git submodule 管理。
 - [x] GD32 V3.0.3 作为厂商快照保存在 `vendor/`，目录树哈希已锁定。
 - [x] Git 索引拒绝 PDF、构建产物、错误子模块形态和锁外厂商文件。
-- [x] GitHub Actions 使用固定工具链执行无 Keil 软件门禁并保存构建产物。
+- [x] GitHub Actions 使用固定工具链执行 CMake 软件门禁并保存构建产物。
 - [x] 项目适配代码不修改或复制依赖实现。
 - [x] 无线 TransferAbort 可在目标 WAIT 重试期间传递到从机。
 - [x] 单个 SWD 隧道请求总执行时间低于 DAP 和无线协议超时。
@@ -213,7 +261,7 @@ CMSIS-DAP 主机测试覆盖产品版本和能力查询、填充后的 64 字节
 ### 实机门禁
 
 - [ ] 在真实 Cortex-M 目标上通过 Arm CMSIS-DAP Validation。
-- [ ] 使用 Keil、pyOCD 和 OpenOCD 验证下载、断点、单步和复位。
+- [ ] 使用 pyOCD 和 OpenOCD 验证下载、断点、单步和复位。
 - [ ] 验证目标持续返回 WAIT 时的 Transfer Abort 延迟。
 - [ ] 验证两台设备从不同受阻频道启动后能够重新会合。
 - [ ] 验证 GFSK/FLRC 和全部空中速率的切换与回退。
@@ -259,6 +307,6 @@ Validation 工程，不直接编入固件。
 ### 正式发布前仍需提供或确认
 
 - 可合法用于产品发布的 USB VID/PID。
-- 一套真实 Cortex-M 目标板，用于 Arm Validation、Keil、pyOCD 和 OpenOCD。
+- 一套真实 Cortex-M 目标板，用于 Arm Validation、pyOCD 和 OpenOCD。
 - 两块完整无线调试器硬件，用于跳频、吞吐、掉电和长稳验证。
 - 量产所需的生产测试接口、射频法规目标地区和校准要求。

@@ -80,8 +80,6 @@ if ($utf8BomFiles) {
 $forbiddenPatterns = @(
     '(?i)\.pdf$',
     '(?i)\.(o|d|su|axf|map|lnp|dep|htm|elf|hex|bin|zip)$',
-    '(?i)(^|/)project\.sct$',
-    '(?i)\.uvguix\.',
     '(?i)^(build|dist)/',
     '(?i)^vendor/GD32F30x_usbfs_library/'
 )

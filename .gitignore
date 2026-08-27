@@ -1,19 +1,13 @@
 # Build output
 build/
-dist/
 .tmp/
 .worktrees/
 
 # Locally retained vendor reference documents
 vendor/**/*.pdf
 
-# Keil / MDK user state and legacy in-tree artifacts
-firmware/*.uvguix.*
-firmware/*.Bak
-firmware/project.sct
-firmware/Objects/
-firmware/Listings/
-firmware/RTE/
+# Local editor and compiler state
+__pycache__/
 
 # Accidental in-tree compiler output
 firmware/*.o

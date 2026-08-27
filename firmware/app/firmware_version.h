@@ -18,11 +18,13 @@
 #ifndef FIRMWARE_VERSION_H
 #define FIRMWARE_VERSION_H
 
-#define FIRMWARE_VERSION_MAJOR 0U
-#define FIRMWARE_VERSION_MINOR 8U
+#define FIRMWARE_VERSION_MAJOR 1U
+#define FIRMWARE_VERSION_MINOR 0U
 #define FIRMWARE_VERSION_PATCH 0U
 
-#define FIRMWARE_VERSION_STRING "0.8.0-rc.3"
-#define FIRMWARE_USB_BCD_DEVICE  0x0080U
+#define FIRMWARE_VERSION_STRING "1.0.0"
+#define FIRMWARE_USB_BCD_DEVICE  0x0100U
+/* Numeric ordering used by the bootloader; the display string is not parsed. */
+#define FIRMWARE_VERSION_CODE    1000U
 
 #endif

@@ -28,9 +28,9 @@
 | Pin | MCU 引脚名 | 原理图网络 | 状态/备注 |
 | ---: | --- | --- | --- |
 | 1 | `VBAT` | `3V3_MAIN` | 电源 |
-| 2 | `PC13-TAMPER-RTC` | `STAT_LED_R` | RGB 红色通道 |
-| 3 | `PC14-OSC32IN` | `STAT_LED_G` | RGB 绿色通道 |
-| 4 | `PC15-OSC32OUT` | `STAT_LED_B` | RGB 蓝色通道 |
+| 2 | `PC13-TAMPER-RTC` | `STAT_LED_B` | RGB 蓝色通道；实板单色测试一致 |
+| 3 | `PC14-OSC32IN` | `STAT_LED_R` | RGB 红色通道；实板单色测试一致 |
+| 4 | `PC15-OSC32OUT` | `STAT_LED_G` | RGB 绿色通道；实板单色测试一致 |
 | 5 | `PD0-OSCIN` | `HXTAL_IN` | 8 MHz 外部晶振输入 |
 | 6 | `PD1-OSCOUT` | `HXTAL_OUT` | 8 MHz 外部晶振输出 |
 | 7 | `NRST` | `MCU_NRST` | MCU 下载/复位接口 |
@@ -111,9 +111,9 @@
 | `MCU_KEYB` | 46 | `SW2` Pin 1、`C25` Pin 2 |
 | `HXTAL_IN` | 5 | `X1` Pin 1、`C11` Pin 1 |
 | `HXTAL_OUT` | 6 | `X1` Pin 3、`C12` Pin 1 |
-| `STAT_LED_R` | 2 | `R27` Pin 1 |
-| `STAT_LED_G` | 3 | `R28` Pin 1 |
-| `STAT_LED_B` | 4 | `R29` Pin 1 |
+| `STAT_LED_B` | 2 | `R27` Pin 1 |
+| `STAT_LED_R` | 3 | `R28` Pin 1 |
+| `STAT_LED_G` | 4 | `R29` Pin 1 |
 
 ## 当前固件映射对照
 
@@ -121,9 +121,9 @@
 
 | 固件功能 | 当前固件 GPIO | 原理图 GPIO/网络 | 对照结果 |
 | --- | --- | --- | --- |
-| RGB 红灯 | `PC13` | `PC13` / `STAT_LED_R` | 一致 |
-| RGB 绿灯 | `PC14` | `PC14` / `STAT_LED_G` | 一致 |
-| RGB 蓝灯 | `PC15` | `PC15` / `STAT_LED_B` | 一致 |
+| RGB 红灯 | `PC14` | `PC14` / `STAT_LED_R` | 一致 |
+| RGB 绿灯 | `PC15` | `PC15` / `STAT_LED_G` | 一致 |
+| RGB 蓝灯 | `PC13` | `PC13` / `STAT_LED_B` | 一致 |
 | 配置按键 | `PB9` | `PB9` / `MCU_KEYB`，另有 `PB8` / `MCU_KEYA` | 当前只使用 `SW2`；是否支持 `SW1` 待确认 |
 | USB D+ 上拉 | `PA8` | `PA8` / `USB_DP_PU` | 一致 |
 | USB 供电有效检测 | `PA0` 输入 | `PA0` / `USB_AUTO_EN` | 一致；外部高有效输入，固件只读 |

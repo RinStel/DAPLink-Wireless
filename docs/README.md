@@ -21,7 +21,7 @@
 
 ## 版本说明
 
-固件发布版本由 `FIRMWARE_VERSION_STRING` 表示，当前为 `0.8.0-rc.3`；无线帧
+固件发布版本由 `FIRMWARE_VERSION_STRING` 表示，当前为 `1.0.0`；无线帧
 协议版本由 `RADIO_PROTOCOL_VERSION` 表示，当前为 `2U`；接收端拒绝 v1 和未知版本，
 发送端不保留 v1 路径。两者不可互换。
 

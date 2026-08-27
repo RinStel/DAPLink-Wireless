@@ -48,8 +48,21 @@ $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
 foreach ($submodule in $lock.submodules) {
     $path = Join-Path $repoRoot $submodule.path
     if (-not (Test-Path -LiteralPath (Join-Path $path ".git"))) {
-        throw "Submodule is not initialized: $($submodule.path). Run " +
-            "'git submodule update --init --recursive'."
+        # Linked worktrees do not automatically receive a submodule worktree.
+        # Reuse the primary checkout read-only after applying the same commit
+        # and cleanliness checks below; do not copy or initialize dependencies.
+        $gitCommonDir = (& git @gitOptions -C $repoRoot `
+            rev-parse --path-format=absolute --git-common-dir).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cannot locate the common Git directory"
+        }
+        $primaryRoot = Split-Path -Parent $gitCommonDir
+        $primaryPath = Join-Path $primaryRoot $submodule.path
+        if (-not (Test-Path -LiteralPath (Join-Path $primaryPath ".git"))) {
+            throw "Submodule is not initialized: $($submodule.path). Run " +
+                "'git submodule update --init --recursive' in the primary checkout."
+        }
+        $path = $primaryPath
     }
     $safePath = $path.Replace('\', '/')
     $head = (& git @gitOptions -c "safe.directory=$safePath" -C $path rev-parse HEAD).

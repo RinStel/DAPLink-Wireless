@@ -22,11 +22,11 @@
 
 /* Common-anode RGB LED, therefore all channels are active low. */
 #define BOARD_LED_R_PORT       GPIOC
-#define BOARD_LED_R_PIN        GPIO_PIN_13
+#define BOARD_LED_R_PIN        GPIO_PIN_14
 #define BOARD_LED_G_PORT       GPIOC
 #define BOARD_LED_G_PIN        GPIO_PIN_15
 #define BOARD_LED_B_PORT       GPIOC
-#define BOARD_LED_B_PIN        GPIO_PIN_14
+#define BOARD_LED_B_PIN        GPIO_PIN_13
 
 #define BOARD_KEY_PORT         GPIOB
 #define BOARD_KEY_PIN          GPIO_PIN_9
