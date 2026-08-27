@@ -59,8 +59,8 @@ ACK 负载固定为 17 字节：
 21 个普通 transfer，响应只携带已完成读传输的数据，并保持读顺序。无线主机将
 响应映射回 CMSIS-DAP 的原始传输顺序。
 
-发送端仅在 `MODE=AUTO` 时将 ACK RSSI 输入 EWMA 和速率决策。固定速率模式只
-记录指标，不改变 profile。
+发送端仅在 `PROFILE=AUTO` 时将 ACK RSSI 输入 EWMA 和速率决策。固定
+`PROFILE` 模式只记录指标，不改变 profile。
 
 ## Profile 切换与自适应
 
@@ -94,8 +94,9 @@ ACK 负载固定为 17 字节：
 | `< -90 dBm` | FLRC 650 kbps，CR 3/4 |
 
 检测到 CRC、同步、长度或中止错误时直接降至 FLRC 650 kbps。无线恢复会重新
-使用配置中的初始 profile；自动模式初始值为 GFSK 1 Mbps。AUTO 模式下任一端
-连续 500 ms 没有收到有效帧时，也回到 GFSK 1 Mbps 会合 profile。
+使用配置中的初始 profile；`PROFILE=AUTO` 的初始值为 GFSK 1 Mbps。
+`PROFILE=AUTO` 下任一端连续 500 ms 没有收到有效帧时，也回到 GFSK 1 Mbps
+会合 profile。
 
 ## 确定性跳频
 

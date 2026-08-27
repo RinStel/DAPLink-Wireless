@@ -58,63 +58,95 @@ GCC Debug/Release 构建和固件分区。发布产物固定由 CMake 驱动的 
 生成。CLion 可直接打开仓库根目录，选择 `debug` 或 `release` profile；命令行等价于
 `cmake --preset release` 和 `cmake --build --preset release`。
 
-### USB DFU 发布与首次部署
+### Release 固件编译、首次烧录与在线升级
 
-Release 构建在各分目标子目录生成 `daplink_bootloader.*`、`daplink_slot_a.*` 和
-`daplink_slot_b.*`，并在 Release 根目录生成 `daplink_wireless.dwup` 和
-`daplink_factory.hex`。factory HEX
-只合并 Bootloader、Slot A 和已确认的初始 Boot 状态记录，不包含配置页
-`0x0803F000-0x0803FFFF`。GCC/CMake 产物用于发布和在线升级；首次 SWD 部署使用
-`scripts/flash_pyocd.ps1`，按 Bootloader、Slot A 和 Factory State 分区写入。脚本
-默认使用 pyOCD 的 `stm32f103rc` 兼容目标、`under-reset`、`1M` 和 `sector erase`，
-不接受未列入发布契约的文件名。不要用整片擦除替代按区域烧录。
+#### 1. 编译 Release 固件
 
-CLion 的 Release CMake profile 提供非默认目标 `flash_factory`、`flash_bootloader`、
-`flash_slot_a` 和 `flash_slot_b`。需要多个探针时，在 profile 中设置
-`-DPYOCD_PROBE=<unique-id>`；也可以直接运行：
+在仓库根目录执行：
+
+```powershell
+cmake --preset release
+cmake --build --preset release
+```
+
+构建完成后，产物位于 `build/gcc/release/`：
+
+- `daplink_bootloader.hex`、`daplink_slot_a.hex`、`daplink_slot_b.hex`：分区镜像。
+- `daplink_factory.hex`：首次 SWD 部署镜像，包含 Bootloader、Slot A 和初始 Boot
+  状态，不包含配置页 `0x0803F000-0x0803FFFF`，也不写入 Slot B。
+- `daplink_wireless.dwup`：在线 USB DFU 使用的 A/B 升级包。
+
+Release 构建也可以在 CLion 中执行。打开仓库根目录，选择 `release` CMake profile，
+然后运行构建目标；普通构建不会自动连接探针或写入 Flash。
+
+#### 2. 首次通过 pyOCD 烧录
+
+首次部署或 Bootloader 损坏时，使用连接到 SWD 的 pyOCD 探针。先确认探针可见：
+
+```powershell
+pyocd list --probes
+```
+
+然后烧录 factory 镜像：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\flash_pyocd.ps1 `
     -Artifact .\build\gcc\release\daplink_factory.hex `
-    -Probe <unique-id> -Target stm32f103rc -Connect under-reset `
-    -Frequency 1M -Erase sector
+    -Target stm32f103rc -Connect under-reset -Frequency 1M -Erase sector
 ```
 
-`-WhatIf` 只打印命令，不连接探针或写入 Flash。pyOCD 兼容目标不是 GD32 型号认证；
-必须记录完整的编程、校验、回读和复位结果。
+存在多个探针时，增加 `-Probe <unique-id>`。脚本默认使用 `under-reset`、`1M` 和
+`sector erase`，仅接受发布契约中的 `.hex` 或 `.elf` 文件；不要用整片擦除替代按区域
+烧录。`stm32f103rc` 是 GD32F303 的兼容烧录目标，不是芯片身份认证。命令完成后，
+必须检查 pyOCD 的编程、校验、回读和复位结果。
 
-### 当前实板状态（2026-08-26）
+CLion 的 Release profile 还提供非默认目标 `flash_factory`、`flash_bootloader`、
+`flash_slot_a` 和 `flash_slot_b`。需要指定探针时，在 CMake profile 中设置
+`-DPYOCD_PROBE=<unique-id>`；`PYOCD_FREQUENCY`、`PYOCD_CONNECT` 和 `PYOCD_ERASE`
+可用于覆盖脚本默认值。
 
-ST-LINK GDB Server 会在供应商校验阶段拒绝 GD32F303；pyOCD 目前只完成兼容目标的
-连接和读内存验证。当前板上是部分写入状态，首次烧录和 USB DFU 实板验收仍未通过；
-应完成 pyOCD 分区烧录、校验和回读后，再继续 USB 枚举、LED 和回退验收。
+#### 3. 已有 Bootloader 时在线更新
 
-正常更新流程如下：
+在线更新需要安装 `dfu-util`。应用模式下，工具会向配置盘的完整 `CONFIG.TXT` 写入
+一次性字段 `ENTER_DFU=1`，等待应用卷消失，再等待 `28E9:1291` DFU 设备出现：
 
-1. 安装 `dfu-util`，在应用配置盘的完整 `CONFIG.TXT` 中写入精确字段
-   `ENTER_DFU=1`，然后安全弹出；升级工具也可通过 `--volume` 自动完成该写入。
-2. 等待应用卷消失和 `28E9:1291` DFU 设备重新枚举；工具轮询
-   `dfu-util --list`，按接口字符串中的非活动槽、地址和版本选择 `.dwup` 镜像。
-3. 运行 `dfu-util --device 28e9:1291 --alt 0 --download <payload>`。设备端在
-   Manifest 状态响应完成后自动复位，主机等待超时不改变设备端无空闲超时规则。
+```powershell
+python .\tools\daplink_updater.py `
+    .\build\gcc\release\daplink_wireless.dwup `
+    --volume E:\
+```
+
+如果设备已经进入 DFU，可省略 `--volume`：
+
+```powershell
+python .\tools\daplink_updater.py `
+    .\build\gcc\release\daplink_wireless.dwup
+```
+
+可以用以下命令确认 DFU 枚举和 WCID/WinUSB 绑定：
+
+```powershell
+dfu-util --device 28e9:1291 --list
+```
+
+`.dwup` 不得直接交给 `dfu-util --download`。`daplink_updater.py` 会根据设备描述符选择
+非活动槽，生成 64 字节镜像头，再调用 `dfu-util` 传输；Bootloader 负责检查芯片型号、
+槽地址、固件长度、向量表、版本和 CRC32。正常模式只接受更高版本；上电按住 `KEYA`
+进入恢复 DFU 后允许同版本或降级，但仍执行芯片型号、槽地址、固件长度、向量表、版本
+和 CRC32 校验。
+
+下载成功后，Bootloader 在 Manifest 完成后自动复位并试运行新槽。状态灯依次提示蓝色
+等待/写入、青色校验、绿色成功、红色错误或红蓝交替回退；应用完成首次启动确认后保留
+新槽。等待和错误状态不设置空闲超时，拔插 USB 可重新进入 DFU。
+
+软件发布门禁、主机测试和构建成功不能替代实板验收。首次烧录或在线升级后，仍需在真实
+硬件上验证 USB 重新枚举、LED 状态、掉电/拔线恢复、三次试运行回退和恢复按键入口。
 
 Windows 8 及以上系统通过 Bootloader 的 Microsoft OS 1.0 WCID 描述符自动为
 `28E9:1291` 绑定 WinUSB。正常升级不得要求用户使用 Zadig。如果系统在升级
-Bootloader 前已经缓存 Code 28 设备记录，则删除该设备记录并重新插拔一次 USB，
+Bootloader 前已经缓存 `28E9:1291` 的 Code 28 设备记录，则删除 `28E9:1291` 的 Code 28 记录并重新插拔一次 USB，
 再用 `dfu-util --device 28e9:1291 --list` 验证驱动绑定。Zadig 仅用于开发排障，
 不得替换应用模式 `28E9:1290`、ST-Link 或其他 USB 设备的驱动。
-
-可选的一步式主机工具命令为：
-
-```powershell
-python tools/daplink_updater.py build/gcc/release/daplink_wireless.dwup --volume E:\
-```
-
-恢复键上电进入恢复 DFU，是拔插 USB 后的救砖入口；恢复模式允许同版本/降级，但仍
-   强制型号、地址、长度、向量表和 CRC32 校验。试运行候选连续三次未确认会回退，
-   LED 依次提示蓝色等待/写入、青色校验、绿色成功、红色错误和红蓝交替回退。
-   配置页保留、自动复位和 LED 颜色必须在真实板上验收，主机回归和 GCC 构建不能
-   替代 USB 枚举、拔线掉电、三次回退或按键入口的实板证据。
 
 ## 吞吐优化跟进门禁
 
