@@ -35,7 +35,7 @@ static void configuration_button_process(void)
     static bool stable_pressed;
     static uint32_t raw_changed_at;
     static uint32_t pressed_at;
-    bool pressed = board_key_pressed();
+    bool pressed = board_keya_pressed();
     uint32_t now = board_millis();
 
     /* 在释放时完成消抖，从稳定边沿计算按键持续时间。 */

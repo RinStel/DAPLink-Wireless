@@ -33,7 +33,7 @@ EasyEDA 工程 `无线调试器`、`Board_V1.0`、原理图页面 `主控与射�
 | RGB 红灯 | `PC14` | `PC14` / `STAT_LED_R` | 原理图与实板单色测试一致 |
 | RGB 绿灯 | `PC15` | `PC15` / `STAT_LED_G` | 原理图与实板单色测试一致 |
 | RGB 蓝灯 | `PC13` | `PC13` / `STAT_LED_B` | 原理图与实板单色测试一致 |
-| 配置按键 | `PB9` | `PB8` / `MCU_KEYA`、`PB9` / `MCU_KEYB` | 当前只读取一个按键；`SW1` 功能为 `待确认：` |
+| 配置按键（主按键 KEYA） | `PB8` | `PB8` / `MCU_KEYA` | 短按和长按均由 `SW1`（KEYA）触发；`SW2`（KEYB，PB9）已接入 BSP，暂不接入应用功能 |
 | USB D+ 上拉 | `PA8` | `PA8` / `USB_DP_PU` | 一致 |
 | USB 供电有效检测 | `PA0` 输入 | `PA0` / `USB_AUTO_EN` | 一致；外部高有效输入，固件通过 `board_usb_power_present()` 读取 |
 | 目标供电控制 | 无独立 MCU 输出 | `PA0` / `USB_AUTO_EN`，两个目标电源开关共用 | 一致；由硬件 USB 供电有效信号控制 |

@@ -89,7 +89,8 @@ void board_init(void)
               BOARD_RF_RX_EN_PIN | BOARD_RF_NRESET_PIN |
               BOARD_RF_TX_EN_PIN);
 
-    gpio_init(BOARD_KEY_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ, BOARD_KEY_PIN);
+    gpio_init(BOARD_KEYA_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ, BOARD_KEYA_PIN);
+    gpio_init(BOARD_KEYB_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ, BOARD_KEYB_PIN);
     gpio_init(BOARD_USB_AUTO_EN_PORT, GPIO_MODE_IN_FLOATING,
               GPIO_OSPEED_2MHZ, BOARD_USB_AUTO_EN_PIN);
     gpio_init(BOARD_RF_BUSY_PORT, GPIO_MODE_IPD, GPIO_OSPEED_2MHZ,
@@ -194,9 +195,14 @@ void board_led_set(board_led_t led, bool on)
     }
 }
 
-bool board_key_pressed(void)
+bool board_keya_pressed(void)
 {
-    return gpio_input_bit_get(BOARD_KEY_PORT, BOARD_KEY_PIN) == RESET;
+    return gpio_input_bit_get(BOARD_KEYA_PORT, BOARD_KEYA_PIN) == RESET;
+}
+
+bool board_keyb_pressed(void)
+{
+    return gpio_input_bit_get(BOARD_KEYB_PORT, BOARD_KEYB_PIN) == RESET;
 }
 
 void board_usb_connect(bool connect)

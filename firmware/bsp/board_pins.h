@@ -28,8 +28,11 @@
 #define BOARD_LED_B_PORT       GPIOC
 #define BOARD_LED_B_PIN        GPIO_PIN_13
 
-#define BOARD_KEY_PORT         GPIOB
-#define BOARD_KEY_PIN          GPIO_PIN_9
+/* KEYA is the primary configuration button; KEYB is BSP-ready for later use. */
+#define BOARD_KEYA_PORT        GPIOB
+#define BOARD_KEYA_PIN         GPIO_PIN_8
+#define BOARD_KEYB_PORT        GPIOB
+#define BOARD_KEYB_PIN         GPIO_PIN_9
 
 #define BOARD_USB_AUTO_EN_PORT GPIOA
 #define BOARD_USB_AUTO_EN_PIN  GPIO_PIN_0

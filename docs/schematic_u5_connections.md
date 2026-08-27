@@ -124,7 +124,7 @@
 | RGB 红灯 | `PC14` | `PC14` / `STAT_LED_R` | 一致 |
 | RGB 绿灯 | `PC15` | `PC15` / `STAT_LED_G` | 一致 |
 | RGB 蓝灯 | `PC13` | `PC13` / `STAT_LED_B` | 一致 |
-| 配置按键 | `PB9` | `PB9` / `MCU_KEYB`，另有 `PB8` / `MCU_KEYA` | 当前只使用 `SW2`；是否支持 `SW1` 待确认 |
+| 配置按键 | `PB8` | `PB8` / `MCU_KEYA` | 当前使用 `SW1`（KEYA）；`PB9` / `MCU_KEYB`（KEYB）已接入 BSP，暂不接入应用功能 |
 | USB D+ 上拉 | `PA8` | `PA8` / `USB_DP_PU` | 一致 |
 | USB 供电有效检测 | `PA0` 输入 | `PA0` / `USB_AUTO_EN` | 一致；外部高有效输入，固件只读 |
 | 目标供电控制 | 无独立 MCU 输出 | `PA0` / `USB_AUTO_EN` | 一致；两个目标电源开关由硬件公共网络控制 |
@@ -143,7 +143,7 @@
 
 ## 待确认项
 
-1. 当前配置按键逻辑只读取 `PB9`。原理图新增或保留了 `PB8/MCU_KEYA` 与 `PB9/MCU_KEYB` 两个按键网络。必须确认 `SW1` 是否需要参与短按/长按配置逻辑。
+1. 当前配置按键逻辑读取 `PB8/MCU_KEYA`（SW1），短按和长按功能均由 KEYA 触发。BSP 已初始化 `PB9/MCU_KEYB`（SW2）并提供读取接口；应用层暂不为 KEYB 分配功能。
 2. `RF_DIO2`（`PB0`）和 `RF_DIO3`（`PB10`）已连接到 `U6`，但当前 `radio_hal.c` 只使用 `RF_DIO1`。必须确认 DIO2/DIO3 是否由模块内部功能使用，还是固件需要新增处理。
 3. `BOARD_TGT_BOOT_*` 当前只在板级初始化中配置为高阻输入，代码没有主动驱动目标 BOOT。必须确认这是预期行为。
 

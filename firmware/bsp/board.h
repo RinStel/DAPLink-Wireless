@@ -51,7 +51,10 @@ void board_watchdog_feed(void);
 
 /* on/off 是逻辑状态；board.c 负责适配低电平有效的 LED 接线。 */
 void board_led_set(board_led_t led, bool on);
-bool board_key_pressed(void);
+/* KEYA drives the current configuration-button behavior. */
+bool board_keya_pressed(void);
+/* KEYB is initialized by the BSP but has no application behavior yet. */
+bool board_keyb_pressed(void);
 
 void board_usb_connect(bool connect);
 /* 返回 USB 供电检测输入，不代表 D+ 上拉状态。 */

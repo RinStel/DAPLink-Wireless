@@ -5,7 +5,7 @@
 - 收紧无线 SWD Sequence 的 bit_count 边界，拒绝会因 `uint8_t` 截断而形成的畸形请求，并增加最大载荷回归测试。
 - 修复 Windows PowerShell 下 GCC 子工具、主机测试编译器和 Git 全局 excludes 权限警告导致的门禁不稳定问题。
 - 将项目文档合并为项目、硬件、无线、开发与发布四本手册，保留 EasyEDA U5 原理图连接记录作为独立事实来源。
-- 将固件版本更新为 `1.0.0`；无线帧协议版本独立维护。
+- 将固件版本更新为 `1.0.0`。
 - 为 Bootloader DFU `28E9:1291` 增加 Microsoft OS 1.0 WCID 描述符，使 Windows 8 及以上系统自动绑定 WinUSB。
 - 让 Bootloader DFU 接口报告非活动槽、加载地址、已确认版本和恢复模式，并按更新后的原理图及实板单色测试统一 `PC13/PC14/PC15` 的蓝/红/绿映射。
 

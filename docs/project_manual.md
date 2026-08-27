@@ -8,8 +8,7 @@ DAPLink-Wireless 使用两块相同硬件构成无线 CMSIS-DAP v2 调试器。�
 CDC ACM 虚拟串口和 MSC 配置磁盘。
 
 当前状态：固件版本为 `1.0.0`，无线链路协议版本为 `v2`，
-无线帧头偏移 2 的协议字段为 `02`。`FIRMWARE_VERSION_STRING` 与
-`RADIO_PROTOCOL_VERSION` 是独立标识。现有发布文档使用硬件版本 `v0.5`；
+无线帧头偏移 2 的协议字段为 `02`。现有发布文档使用硬件版本 `v0.5`；
 EasyEDA 当前读取到的 `Board_V1.0` 与项目文档中的 `v0.5` 对应关系为 `待确认：`。
 
 项目只提供 CMSIS-DAP v2 Bulk 接口，不兼容 CMSIS-DAP v1 HID。
