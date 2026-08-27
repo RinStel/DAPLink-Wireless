@@ -95,18 +95,18 @@
 **Files:**
 - Modify: conflicts reported by `git merge main` or `git merge feature/usb-dfu`
 
-- [ ] **Step 1: 记录分支基线并提交工作树**
+- [x] **Step 1: 记录分支基线并提交工作树**
 
 在 `feature/usb-dfu` 上完成 Task 4 后确认工作树干净，再切换到主仓库根目录的 `main`。
 
-- [ ] **Step 2: 合并并处理冲突**
+- [x] **Step 2: 合并并处理冲突**
 
 运行 `git merge feature/usb-dfu`；冲突按 CMake/DFU 设计解决，优先保留主线的新版本信息和本分支完整 DFU 契约。每个冲突解决后运行 `git diff --check`。
 
-- [ ] **Step 3: 在合并结果运行完整门禁**
+- [x] **Step 3: 在合并结果运行完整门禁**
 
 运行 `powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1`。若失败，保留分支和合并状态并修复，不删除 worktree。
 
-- [ ] **Step 4: 确认合并结果和分支状态**
+- [x] **Step 4: 确认合并结果和分支状态**
 
 运行 `git status --short`、`git log --oneline --decorate -5` 和 `git branch --contains feature/usb-dfu`，报告合并提交、验证结果和未完成的硬件验收。
