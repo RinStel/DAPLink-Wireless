@@ -8,6 +8,15 @@
 static volatile uint32_t s_millis;
 
 /* Board LEDs are common-anode and therefore use active-low GPIO writes. */
+#if defined(BOARD_KEYA_PORT) && defined(BOARD_KEYA_PIN)
+#define BOOT_RECOVERY_KEY_PORT BOARD_KEYA_PORT
+#define BOOT_RECOVERY_KEY_PIN  BOARD_KEYA_PIN
+#else
+/* Compatibility with checkouts that still expose the single-key BSP names. */
+#define BOOT_RECOVERY_KEY_PORT BOARD_KEY_PORT
+#define BOOT_RECOVERY_KEY_PIN  BOARD_KEY_PIN
+#endif
+
 static void output_write(uint32_t port, uint32_t pin, bool high)
 {
     if (high) {
@@ -26,8 +35,8 @@ void boot_board_init(void)
               BOARD_LED_R_PIN | BOARD_LED_G_PIN | BOARD_LED_B_PIN);
     gpio_init(GPIOA, GPIO_MODE_OUT_PP, GPIO_OSPEED_2MHZ,
               BOARD_USB_PULLUP_PIN);
-    gpio_init(BOARD_KEY_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ,
-              BOARD_KEY_PIN);
+    gpio_init(BOOT_RECOVERY_KEY_PORT, GPIO_MODE_IPU, GPIO_OSPEED_2MHZ,
+              BOOT_RECOVERY_KEY_PIN);
     output_write(BOARD_LED_R_PORT, BOARD_LED_R_PIN, true);
     output_write(BOARD_LED_G_PORT, BOARD_LED_G_PIN, true);
     output_write(BOARD_LED_B_PORT, BOARD_LED_B_PIN, true);
@@ -54,12 +63,14 @@ bool boot_board_key_held(uint32_t stable_ms)
 {
     uint32_t started;
 
-    if (gpio_input_bit_get(BOARD_KEY_PORT, BOARD_KEY_PIN) != RESET) {
+    if (gpio_input_bit_get(BOOT_RECOVERY_KEY_PORT,
+                           BOOT_RECOVERY_KEY_PIN) != RESET) {
         return false;
     }
     started = boot_board_millis();
     while ((uint32_t)(boot_board_millis() - started) < stable_ms) {
-        if (gpio_input_bit_get(BOARD_KEY_PORT, BOARD_KEY_PIN) != RESET) {
+        if (gpio_input_bit_get(BOOT_RECOVERY_KEY_PORT,
+                               BOOT_RECOVERY_KEY_PIN) != RESET) {
             return false;
         }
     }
