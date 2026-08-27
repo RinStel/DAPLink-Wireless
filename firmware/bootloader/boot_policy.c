@@ -2,6 +2,9 @@
 
 boot_decision_t boot_policy_decide(const boot_policy_input_t *input)
 {
+    /* Recovery and one-shot DFU requests take precedence over any slot.  A
+     * pending candidate is tried only while its persisted attempt budget is
+     * still available; otherwise the confirmed slot is restored. */
     boot_decision_t decision = {BOOT_ACTION_DFU_RECOVERY};
     firmware_slot_t confirmed;
     firmware_slot_t other;

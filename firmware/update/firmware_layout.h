@@ -18,13 +18,19 @@
 
 typedef enum {
     FIRMWARE_SLOT_A = 0U,
-    FIRMWARE_SLOT_B = 1U
+    FIRMWARE_SLOT_B = 1U,
+    /* Used only while recovery has no valid Boot state. */
+    FIRMWARE_SLOT_NONE = 0xFFU
 } firmware_slot_t;
+
+#ifndef FIRMWARE_LINK_SLOT
+#define FIRMWARE_LINK_SLOT FIRMWARE_SLOT_A
+#endif
 
 static inline uint32_t firmware_slot_base(firmware_slot_t slot)
 {
     return slot == FIRMWARE_SLOT_A ? FIRMWARE_SLOT_A_BASE :
-                                      FIRMWARE_SLOT_B_BASE;
+           slot == FIRMWARE_SLOT_B ? FIRMWARE_SLOT_B_BASE : 0U;
 }
 
 #endif

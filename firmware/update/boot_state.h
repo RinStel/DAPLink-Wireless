@@ -16,6 +16,8 @@ typedef struct {
     uint32_t generation;
     firmware_slot_t confirmed_slot;
     uint32_t confirmed_version;
+    uint32_t confirmed_length;
+    uint32_t confirmed_crc32;
     firmware_slot_t pending_slot;
     uint32_t pending_version;
     uint32_t pending_length;

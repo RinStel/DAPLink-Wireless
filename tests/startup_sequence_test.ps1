@@ -18,6 +18,10 @@ function Require-Before([string]$text, [string]$first, [string]$second,
 $main = Get-Content -Raw (Join-Path $RepoRoot "firmware/app/main.c")
 $serialBridge = Get-Content -Raw (
     Join-Path $RepoRoot "firmware/app/serial_bridge.c")
+$bootBoard = Get-Content -Raw (
+    Join-Path $RepoRoot "firmware/bootloader/boot_board.c")
+$bootMain = Get-Content -Raw (
+    Join-Path $RepoRoot "firmware/bootloader/main.c")
 
 Require-Before $main "device_config_init();" "usb_config_disk_init();" `
     "device configuration must be loaded before the USB disk snapshot"
@@ -34,6 +38,18 @@ if (($initStart -lt 0) -or ($applyStart -le $initStart)) {
 $initBody = $serialBridge.Substring($initStart, $applyStart - $initStart)
 if ($initBody -match "s_radio_ready\s*=\s*radio_configure\(") {
     throw "Startup sequence assertion failed: serial_bridge_init must not synchronously configure the radio"
+}
+
+Require-Before $bootBoard "__disable_irq();" "__enable_irq();" `
+    "application jump must restore global interrupts before reset vector"
+Require-Before $bootBoard "__enable_irq();" "application_reset();" `
+    "application reset handler must run with global interrupts enabled"
+
+if ($bootMain -notmatch "input\.state\s*=\s*state\s*;") {
+    throw "Startup sequence assertion failed: boot policy must receive the loaded state"
+}
+if ($bootMain -notmatch "input\.attempts_used\s*=\s*state\.attempts_used\s*;") {
+    throw "Startup sequence assertion failed: boot policy must receive the attempt count"
 }
 
 Write-Host "Startup sequence tests passed"

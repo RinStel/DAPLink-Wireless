@@ -22,9 +22,11 @@
 #include <string.h>
 
 #include "board.h"
+#include "boot_mailbox.h"
 #include "cmsis_dap_usb.h"
 #include "device_config.h"
 #include "device_config_storage.h"
+#include "dfu_config_command.h"
 #include "firmware_version.h"
 #include "gd32f30x_misc.h"
 #include "gd32f30x_rcu.h"
@@ -53,7 +55,8 @@ typedef enum {
     CONFIG_APPLY_OK = 0,
     CONFIG_APPLY_INVALID,
     CONFIG_APPLY_RADIO_FAILED,
-    CONFIG_APPLY_FLASH_FAILED
+    CONFIG_APPLY_FLASH_FAILED,
+    CONFIG_APPLY_ENTER_DFU
 } config_apply_result_t;
 
 static usb_dev s_usb_device;
@@ -67,6 +70,7 @@ static volatile bool s_refresh_requested;
 static device_config_t s_refresh_previous;
 static bool s_last_apply_ok;
 static config_apply_result_t s_apply_result;
+static bool s_dfu_reset_pending;
 
 static uint8_t s_inquiry_data[USBD_STD_INQUIRY_LENGTH] = {
     0x00U, 0x80U, 0x02U, 0x02U, 31U, 0x00U, 0x00U, 0x00U,
@@ -196,7 +200,7 @@ static uint32_t config_text_build(char output[CONFIG_BUFFER_SIZE])
                      "# SYNC must contain exactly 16 letters or digits.\r\n"
                      "# DEVICE_MODE: WIRED, WIRELESS_HOST, WIRELESS_SLAVE.\r\n"
                      "# MODE is AUTO or FIXED. PROFILE: GFSK2M, GFSK1M,\r\n"
-                     "# GFSK500K, FLRC1M3, FLRC650K.\r\n"
+                     "# GFSK500K, FLRC1M3, FLRC650K. Set ENTER_DFU=1 to update.\r\n"
                      "SYNC=") ||
         !text_append(output, CONFIG_BUFFER_SIZE, &length,
                      config->sync_code) ||
@@ -209,7 +213,8 @@ static uint32_t config_text_build(char output[CONFIG_BUFFER_SIZE])
                      "\r\nPROFILE=") ||
         !text_append(output, CONFIG_BUFFER_SIZE, &length,
                      sx128x_profile_name(config->fixed_profile)) ||
-        !text_append(output, CONFIG_BUFFER_SIZE, &length, "\r\n")) {
+        !text_append(output, CONFIG_BUFFER_SIZE, &length,
+                     "\r\nENTER_DFU=0\r\n")) {
         return 0U;
     }
     return length;
@@ -231,6 +236,9 @@ static uint32_t status_text_build(char output[STATUS_BUFFER_SIZE])
         break;
     case CONFIG_APPLY_FLASH_FAILED:
         result = "FLASH_SAVE_FAILED";
+        break;
+    case CONFIG_APPLY_ENTER_DFU:
+        result = "ENTERING_DFU";
         break;
     case CONFIG_APPLY_OK:
     default:
@@ -567,6 +575,7 @@ bool usb_config_disk_init(void)
     s_refresh_requested = false;
     s_last_apply_ok = true;
     s_apply_result = CONFIG_APPLY_OK;
+    s_dfu_reset_pending = false;
 
     rcu_usb_clock_config(RCU_CKUSB_CKPLL_DIV2_5);
     rcu_periph_clock_enable(RCU_USBD);
@@ -594,6 +603,8 @@ void usb_config_disk_process(void)
     uint32_t version_before;
     uint32_t version_after;
     uint32_t idle_ms;
+    bool enter_dfu = false;
+    dfu_config_command_result_t dfu_command;
 
     /* USB DAP 流量优先。配置变更必须等待 MSC 和 CMSIS-DAP 都空闲后才断开
      * 复合设备。 */
@@ -652,6 +663,15 @@ void usb_config_disk_process(void)
         return;
     }
 
+    dfu_command = dfu_config_command_parse(s_config_buffer, &enter_dfu);
+    if (dfu_command == DFU_CONFIG_COMMAND_INVALID) {
+        s_disk_dirty = false;
+        s_last_apply_ok = false;
+        s_apply_result = CONFIG_APPLY_INVALID;
+        disk_rebuild_and_reconnect();
+        return;
+    }
+
     previous = *device_config_get();
     if (!config_parse(s_config_buffer)) {
         s_disk_dirty = false;
@@ -664,7 +684,9 @@ void usb_config_disk_process(void)
     if (device_config_equal(&previous, device_config_get())) {
         s_disk_dirty = false;
         s_last_apply_ok = true;
-        s_apply_result = CONFIG_APPLY_OK;
+        s_apply_result = enter_dfu ? CONFIG_APPLY_ENTER_DFU :
+                                     CONFIG_APPLY_OK;
+        s_dfu_reset_pending = enter_dfu;
         return;
     }
 
@@ -706,13 +728,19 @@ void usb_config_disk_process(void)
         return;
     }
     s_last_apply_ok = true;
-    s_apply_result = CONFIG_APPLY_OK;
+    s_apply_result = enter_dfu ? CONFIG_APPLY_ENTER_DFU : CONFIG_APPLY_OK;
+    s_dfu_reset_pending = enter_dfu;
     disk_rebuild_and_reconnect();
 }
 
 bool usb_config_disk_configured(void)
 {
     return (s_usb_device.cur_status == USBD_CONFIGURED) && s_last_apply_ok;
+}
+
+bool usb_config_disk_dfu_reset_pending(void)
+{
+    return s_dfu_reset_pending;
 }
 
 void usb_config_disk_irq(void)

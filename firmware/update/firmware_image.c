@@ -78,15 +78,13 @@ firmware_image_result_t firmware_image_header_validate(
         (header->firmware_version_code <= confirmed_version)) {
         return FIRMWARE_IMAGE_ERR_VERSION;
     }
-    if (header->header_crc32 != 0U) {
+    {
         uint32_t calculated = firmware_crc32(
             header, (uint32_t)offsetof(firmware_image_header_t,
                                       header_crc32));
         if (calculated != header->header_crc32) {
             return FIRMWARE_IMAGE_ERR_HEADER_CRC;
         }
-    } else {
-        return FIRMWARE_IMAGE_ERR_HEADER_CRC;
     }
     return FIRMWARE_IMAGE_VALID;
 }

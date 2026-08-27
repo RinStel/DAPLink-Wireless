@@ -94,6 +94,8 @@ int main(void)
                                    47512U, 0x12345678U));
     assert(boot_state_load(&state));
     assert(state.confirmed_slot == FIRMWARE_SLOT_A);
+    assert(state.confirmed_length == 47512U);
+    assert(state.confirmed_crc32 == 0x12345678U);
     assert(state.phase == BOOT_PHASE_CONFIRMED);
 
     assert(boot_state_set_pending(FIRMWARE_SLOT_B, 800U,
@@ -118,6 +120,8 @@ int main(void)
     assert(boot_state_load(&state));
     assert(state.confirmed_slot == FIRMWARE_SLOT_B);
     assert(state.confirmed_version == 800U);
+    assert(state.confirmed_length == 48000U);
+    assert(state.confirmed_crc32 == 0x87654321U);
 
     memset(s_flash, 0xFF, sizeof(s_flash));
     reset_failures();

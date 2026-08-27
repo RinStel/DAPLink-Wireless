@@ -19,6 +19,7 @@ typedef enum {
     DFU_FLASH_ERR_PROGRAM,
     DFU_FLASH_ERR_READ,
     DFU_FLASH_ERR_CRC,
+    DFU_FLASH_ERR_VECTOR,
     DFU_FLASH_ERR_STATE_COMMIT
 } dfu_flash_result_t;
 
@@ -32,6 +33,7 @@ typedef struct {
     firmware_image_header_t header;
     firmware_slot_t active_slot;
     uint32_t next_offset;
+    bool recovery_mode;
     bool active;
 } dfu_flash_session_t;
 

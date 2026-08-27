@@ -1,5 +1,6 @@
 #include "boot_state.h"
 
+#include <stddef.h>
 #include <string.h>
 
 #include "firmware_image.h"
@@ -28,7 +29,9 @@ typedef struct {
     uint32_t attempt_mask;
     uint32_t record_crc32;
     uint32_t commit;
-    uint8_t reserved1[20];
+    uint32_t confirmed_length;
+    uint32_t confirmed_crc32;
+    uint8_t reserved1[12];
 } boot_state_record_t;
 
 _Static_assert(sizeof(boot_state_record_t) == BOOT_STATE_RECORD_SIZE,
@@ -38,7 +41,6 @@ _Static_assert(sizeof(boot_state_record_t) == BOOT_STATE_RECORD_SIZE,
 extern bool boot_state_test_read(uint32_t address, void *data, size_t length);
 extern bool boot_state_test_erase(uint32_t address);
 extern bool boot_state_test_program(uint32_t address, uint32_t value);
-#include <stddef.h>
 #else
 #include "gd32f30x_fmc.h"
 #endif
@@ -101,8 +103,6 @@ static uint32_t state_address(uint8_t index)
 
 static bool record_decode(uint32_t address, boot_state_record_t *record)
 {
-    uint32_t crc;
-
     if (!flash_read(address, record, sizeof(*record))) {
         return false;
     }
@@ -115,8 +115,17 @@ static bool record_decode(uint32_t address, boot_state_record_t *record)
         (record->phase > (uint8_t)BOOT_PHASE_PENDING_TEST)) {
         return false;
     }
-    crc = firmware_crc32(record, BOOT_STATE_ATTEMPT_MASK_OFFSET);
-    return crc == record->record_crc32;
+    {
+        boot_state_record_t normalized = *record;
+
+        /* Normalize fields that are written after the CRC or changed during
+         * trial boots, then calculate one continuous CRC over the record. */
+        normalized.attempt_mask = 0xFFFFFFFFU;
+        normalized.record_crc32 = 0U;
+        normalized.commit = 0U;
+        return firmware_crc32(&normalized, sizeof(normalized)) ==
+               record->record_crc32;
+    }
 }
 
 static void record_to_state(const boot_state_record_t *record,
@@ -125,6 +134,8 @@ static void record_to_state(const boot_state_record_t *record,
     state->generation = record->generation;
     state->confirmed_slot = (firmware_slot_t)record->confirmed_slot;
     state->confirmed_version = record->confirmed_version;
+    state->confirmed_length = record->confirmed_length;
+    state->confirmed_crc32 = record->confirmed_crc32;
     state->pending_slot = (firmware_slot_t)record->pending_slot;
     state->pending_version = record->pending_version;
     state->pending_length = record->pending_length;
@@ -187,10 +198,28 @@ static bool record_write(const boot_state_record_t *record,
     }
     for (offset = 0U; offset < BOOT_STATE_COMMIT_OFFSET;
          offset += sizeof(uint32_t)) {
+        if (offset == BOOT_STATE_CRC_OFFSET) {
+            /* record_crc32 is written after all CRC-covered fields. */
+            continue;
+        }
         memcpy(&word, (const uint8_t *)record + offset, sizeof(word));
         if (!flash_program(address + offset, word)) {
             return false;
         }
+    }
+    memcpy(&word, &record->record_crc32, sizeof(word));
+    if (!flash_program(address + BOOT_STATE_CRC_OFFSET, word)) {
+        return false;
+    }
+    memcpy(&word, &record->confirmed_length, sizeof(word));
+    if (!flash_program(address + offsetof(boot_state_record_t,
+                                           confirmed_length), word)) {
+        return false;
+    }
+    memcpy(&word, &record->confirmed_crc32, sizeof(word));
+    if (!flash_program(address + offsetof(boot_state_record_t,
+                                           confirmed_crc32), word)) {
+        return false;
     }
     if (!flash_program(address + BOOT_STATE_COMMIT_OFFSET,
                        BOOT_STATE_COMMIT)) {
@@ -216,9 +245,17 @@ static bool save_state(const boot_state_t *state)
     record.pending_version = state->pending_version;
     record.pending_length = state->pending_length;
     record.pending_crc32 = state->pending_crc32;
+    record.confirmed_length = state->confirmed_length;
+    record.confirmed_crc32 = state->confirmed_crc32;
     record.attempt_mask = 0xFFFFFFFFU;
-    record.record_crc32 = firmware_crc32(&record,
-                                         BOOT_STATE_ATTEMPT_MASK_OFFSET);
+    {
+        boot_state_record_t normalized = record;
+
+        normalized.record_crc32 = 0U;
+        normalized.commit = 0U;
+        record.record_crc32 = firmware_crc32(&normalized,
+                                             sizeof(normalized));
+    }
     target = s_active_valid && (s_active_address == state_address(0U))
              ? state_address(1U) : state_address(0U);
 #ifndef BOOT_STATE_HOST_TEST
@@ -247,6 +284,8 @@ bool boot_state_factory_init(firmware_slot_t confirmed_slot,
         .generation = 1U,
         .confirmed_slot = confirmed_slot,
         .confirmed_version = confirmed_version,
+        .confirmed_length = image_length,
+        .confirmed_crc32 = image_crc32,
         .pending_slot = confirmed_slot,
         .pending_version = confirmed_version,
         .pending_length = image_length,
@@ -328,6 +367,8 @@ bool boot_state_confirm(firmware_slot_t running_slot)
     state.generation++;
     state.confirmed_slot = running_slot;
     state.confirmed_version = state.pending_version;
+    state.confirmed_length = state.pending_length;
+    state.confirmed_crc32 = state.pending_crc32;
     state.phase = BOOT_PHASE_CONFIRMED;
     state.attempts_used = 0U;
     return save_state(&state);
