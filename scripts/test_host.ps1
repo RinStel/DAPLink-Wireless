@@ -1,36 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
 # 使用严格警告编译并执行每个主机回归；all 是 verify_release.ps1 使用的软件门禁。
-param(
-    [ValidateSet(
-        "all",
-        "board-pins",
-        "status-indicator",
-        "cmsis-dap",
-        "target-swd-config",
-        "cdc-transport",
-        "cmsis-dap-usb",
-        "radio-protocol",
-        "serial-bridge-window",
-        "device-config",
-        "config-storage",
-        "swd-tunnel",
-        "target-uart-irq",
-        "target-uart-ring",
-        "link-adaptation",
-        "sx1281",
-        "usb-descriptor",
-        "usb-disk",
-        "startup-sequence",
-        "firmware-image",
-        "boot-state",
-        "boot-policy",
-        "boot-mailbox",
-        "dfu-flash"
-    )]
-    [string]$Name = "all",
-    [string]$Compiler = "gcc"
-)
+$Name = "all"
+$CompilerName = "gcc"
+for ($argumentIndex = 0; $argumentIndex -lt $args.Count; $argumentIndex++) {
+    switch ($args[$argumentIndex]) {
+        "-Name" {
+            if ($argumentIndex + 1 -ge $args.Count) { throw "-Name requires a value" }
+            $Name = [string]$args[++$argumentIndex]
+        }
+        "-Compiler" {
+            if ($argumentIndex + 1 -ge $args.Count) { throw "-Compiler requires a value" }
+            $CompilerName = [string]$args[++$argumentIndex]
+        }
+        default { throw "Unknown argument: $($args[$argumentIndex])" }
+    }
+}
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -43,6 +28,58 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "usb-config-dfu-entry" = @{
+        label = "MSC DFU entry"
+        includes = @("firmware/update")
+        sources = @("tests/usb_config_dfu_entry_test.c",
+                    "firmware/update/dfu_config_command.c")
+    }
+    "boot-led" = @{
+        label = "Bootloader LED"
+        includes = @("firmware/bootloader")
+        sources = @("tests/boot_led_test.c",
+                    "firmware/bootloader/boot_led.c")
+    }
+    "boot-runtime" = @{
+        label = "Bootloader runtime policy"
+        includes = @("firmware/update", "firmware/bootloader")
+        sources = @("tests/boot_runtime_test.c",
+                    "firmware/bootloader/boot_policy.c",
+                    "firmware/bootloader/boot_led.c")
+    }
+    "app-boot-confirm" = @{
+        label = "Application boot confirmation"
+        includes = @("firmware/update")
+        sources = @("tests/app_boot_confirm_test.c",
+                    "firmware/update/boot_confirm_once.c")
+    }
+    "dfu-device" = @{
+        label = "DFU device state machine"
+        defines = @("BOOT_STATE_HOST_TEST")
+        includes = @("firmware/update", "firmware/bootloader")
+        sources = @("tests/dfu_device_test.c",
+                    "firmware/bootloader/dfu_device.c",
+                    "firmware/bootloader/dfu_flash.c",
+                    "firmware/update/boot_state.c",
+                    "firmware/update/firmware_image.c")
+    }
+    "dfu-usb-descriptor" = @{
+        label = "DFU WinUSB descriptor"
+        analyzer = $true
+        defines = @("BOOT_STATE_HOST_TEST", "DFU_DEVICE_USB_TARGET",
+                    "GD32F30X_HD")
+        includes = @("firmware/update", "firmware/bootloader", "firmware/usb",
+                     "firmware/bsp")
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include",
+            "vendor/GD32F30x_usbd_library/device/Include",
+            "vendor/GD32F30x_usbd_library/usbd/Include"
+        )
+        sources = @("tests/dfu_usb_descriptor_test.c",
+                    "firmware/bootloader/dfu_device.c")
+    }
     "dfu-flash" = @{
         label = "DFU flash transaction"
         defines = @("BOOT_STATE_HOST_TEST")
@@ -271,16 +308,16 @@ $tests = [ordered]@{
     }
 }
 
-$compilerCommand = Get-Command $Compiler -ErrorAction SilentlyContinue
+$compilerCommand = Get-Command $CompilerName -ErrorAction SilentlyContinue
 if ($null -eq $compilerCommand) {
-    throw "Host C compiler not found: $Compiler"
+    throw "Host C compiler not found: $CompilerName"
 }
 $compilerPath = $compilerCommand.Source
 if ([string]::IsNullOrWhiteSpace($compilerPath)) {
     $compilerPath = $compilerCommand.Definition
 }
 if ([string]::IsNullOrWhiteSpace($compilerPath)) {
-    throw "Unable to resolve host C compiler path: $Compiler"
+    throw "Unable to resolve host C compiler path: $CompilerName"
 }
 # GCC may need sibling DLLs and cc1.exe that are not found unless the
 # directory containing the selected executable is on PATH.

@@ -1,56 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2025 RinStel <me@rinx.nz>
-# 拒绝源码树中的固件生成物；-CleanGenerated 只删除 firmware 下明确列出的文件。
-param(
-    [switch]$CleanGenerated
-)
-
+# 拒绝源码树中的固件生成物。
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $firmwareRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $repoRoot "firmware"))
-$directorySeparator = [System.IO.Path]::DirectorySeparatorChar
-
-function Remove-FirmwareGeneratedFile([System.IO.FileInfo]$file) {
-    $fullPath = [System.IO.Path]::GetFullPath($file.FullName)
-    $prefix = $firmwareRoot.TrimEnd('\', '/') + $directorySeparator
-    if (-not $fullPath.StartsWith(
-            $prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to remove a file outside firmware: $fullPath"
-    }
-    Remove-Item -LiteralPath $fullPath -Force
-}
-
-if ($CleanGenerated) {
-    $generatedFiles = @()
-    $scatterFile = Join-Path $firmwareRoot "project.sct"
-    if (Test-Path -LiteralPath $scatterFile -PathType Leaf) {
-        $generatedFiles += Get-Item -LiteralPath $scatterFile
-    }
-    $generatedFiles += Get-ChildItem -LiteralPath $firmwareRoot -File |
-        Where-Object { $_.Name -like "*.uvguix.*" }
-    foreach ($file in $generatedFiles) {
-        Remove-FirmwareGeneratedFile $file
-    }
-}
-
 $forbiddenExtensions = @(
     ".o", ".d", ".su", ".axf", ".map", ".lnp", ".dep", ".htm",
     ".elf", ".hex", ".bin"
 )
 $forbiddenFiles = Get-ChildItem -LiteralPath $firmwareRoot -Recurse -File |
     Where-Object {
-        ($forbiddenExtensions -contains $_.Extension.ToLowerInvariant()) -or
-        ($_.Name -like "*.uvguix.*") -or
-        ($_.Name -eq "project.sct")
+        $forbiddenExtensions -contains $_.Extension.ToLowerInvariant()
     }
-$forbiddenDirectories = @("Objects", "Listings", "RTE")
-$pollutedDirectories = Get-ChildItem -LiteralPath $firmwareRoot `
-    -Recurse -Directory |
-    Where-Object { $forbiddenDirectories -contains $_.Name }
 
-if ($forbiddenFiles.Count -gt 0 -or $pollutedDirectories.Count -gt 0) {
-    $paths = @($forbiddenFiles.FullName) + @($pollutedDirectories.FullName)
+if ($forbiddenFiles.Count -gt 0) {
+    $paths = @($forbiddenFiles.FullName)
     $relativePaths = $paths | Sort-Object -Unique | ForEach-Object {
         $_.Substring($repoRoot.Length).TrimStart('\', '/').
             Replace('\', '/')
