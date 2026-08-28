@@ -7,6 +7,7 @@
 #include "cdc_acm_core.h"
 #include "cdc_request_validation.h"
 #include "cmsis_dap_usb.h"
+#include "device_config.h"
 #include "firmware_version.h"
 #include "usb_composite.h"
 #include "usbd_enum.h"
@@ -21,10 +22,16 @@
 usb_class msc_class;
 usb_class cdc_class;
 usb_class cmsis_dap_usb_class;
+static device_config_t s_device_config;
 static unsigned int s_board_delay_calls;
 static unsigned int s_board_led_calls;
 static unsigned int s_class_init_calls;
 static unsigned int s_standard_request_calls;
+
+const device_config_t *device_config_get(void)
+{
+    return &s_device_config;
+}
 
 uint32_t board_device_id_hash(void)
 {
@@ -106,6 +113,9 @@ int main(void)
     usb_req standard_request = {
         .bRequest = USB_GET_STATUS
     };
+
+    s_device_config.device_mode = DEVICE_MODE_WIRED;
+    usb_composite_prepare();
 
     msc_class.init = class_init_ok;
     cdc_class.init = class_init_ok;
@@ -301,5 +311,40 @@ int main(void)
                             USB_RECPTYPE_DEV;
     request.wValue = 1U;
     assert(usbd_vendor_request(&udev, &request) == REQ_NOTSUPP);
+
+    s_device_config.device_mode = DEVICE_MODE_WIRELESS_SLAVE;
+    usb_composite_prepare();
+    config = composite_desc.config_desc;
+    assert(decode_u16_le(&config[2]) == 32U);
+    assert(config[4] == 1U);
+    assert(config[9] == sizeof(usb_desc_itf));
+    assert(config[11] == USBD_MSC_INTERFACE);
+    assert(config[13] == 2U);
+    assert(config[14] == USB_CLASS_MSC);
+    assert(config[18] == sizeof(usb_desc_ep));
+    assert(config[20] == MSC_IN_EP);
+    assert(config[25] == sizeof(usb_desc_ep));
+    assert(config[27] == MSC_OUT_EP);
+
+    s_class_init_calls = 0U;
+    assert(composite_class.init(&udev, 0U) == USBD_OK);
+    assert(s_class_init_calls == 1U);
+
+    request.bmRequestType = USB_TRX_IN | USB_REQTYPE_VENDOR |
+                            USB_RECPTYPE_DEV;
+    request.bRequest = MS_OS_VENDOR_CODE;
+    request.wValue = 0U;
+    request.wIndex = MS_OS_COMPAT_ID_INDEX;
+    assert(composite_class.req_process(&udev, &request) == REQ_NOTSUPP);
+
+    request.bmRequestType = USB_TRX_OUT | USB_REQTYPE_CLASS |
+                            USB_RECPTYPE_ITF;
+    request.wIndex = CDC_COM_INTERFACE;
+    assert(composite_class.req_process(&udev, &request) == REQ_NOTSUPP);
+
+    request.bmRequestType = USB_TRX_OUT | USB_REQTYPE_STRD |
+                            USB_RECPTYPE_EP;
+    request.wIndex = DAP_V2_OUT_EP;
+    assert(composite_class.req_process(&udev, &request) == REQ_NOTSUPP);
     return 0;
 }

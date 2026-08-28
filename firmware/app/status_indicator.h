@@ -21,6 +21,18 @@ typedef struct {
 } status_indicator_leds_t;
 
 typedef enum {
+    STATUS_INDICATOR_MODE_WIRED = 0,
+    STATUS_INDICATOR_MODE_WIRELESS_HOST,
+    STATUS_INDICATOR_MODE_WIRELESS_SLAVE
+} status_indicator_mode_t;
+
+typedef enum {
+    STATUS_INDICATOR_ACTIVITY_NONE = 0,
+    STATUS_INDICATOR_ACTIVITY_COMMUNICATION,
+    STATUS_INDICATOR_ACTIVITY_PROGRAMMING
+} status_indicator_activity_t;
+
+typedef enum {
     STATUS_INDICATOR_INITIALIZATION_FAILURE = 0,
     STATUS_INDICATOR_RUNTIME_ERROR,
     STATUS_INDICATOR_HEALTHY
@@ -37,8 +49,8 @@ void status_indicator_init(status_indicator_t *indicator,
                            bool initialization_failed);
 status_indicator_leds_t status_indicator_update(status_indicator_t *indicator,
                                                 bool runtime_error,
-                                                bool activity,
-                                                bool heartbeat_on,
+                                                status_indicator_mode_t mode,
+                                                status_indicator_activity_t activity,
                                                 uint32_t now_ms);
 
 #endif

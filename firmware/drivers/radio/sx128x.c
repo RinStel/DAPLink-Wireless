@@ -47,7 +47,6 @@
 #define SX128X_OPCODE_GET_PACKET_STATUS      0x1DU
 #define SX128X_OPCODE_GET_IRQ_STATUS         0x15U
 #define SX128X_OPCODE_CLEAR_IRQ_STATUS       0x97U
-#define SX128X_PACKET_PARAMS_CACHE_ENTRIES   4U
 
 #define SX128X_PACKET_TYPE_GFSK       0x00U
 #define SX128X_PACKET_TYPE_FLRC       0x03U
@@ -99,14 +98,10 @@ static uint8_t s_network_sync_word[5] = {
  */
 static uint8_t s_fifo_tx_buffer[3U + SX128X_MAX_PAYLOAD_SIZE];
 static uint8_t s_fifo_rx_buffer[3U + SX128X_MAX_PAYLOAD_SIZE];
-typedef struct {
-    bool valid;
-    uint8_t command[8];
-} sx128x_packet_params_cache_entry_t;
-
-static sx128x_packet_params_cache_entry_t
-    s_packet_params_cache[SX128X_PACKET_PARAMS_CACHE_ENTRIES];
-static uint8_t s_packet_params_cache_next;
+/* SX1281 同一时刻只有一组活动包参数。缓存只能表示最后一次成功写入的命令，
+ * 不能把历史命令命中当成当前硬件状态。 */
+static bool s_packet_params_valid;
+static uint8_t s_packet_params_command[8];
 
 static sx128x_result_t from_hal_result(radio_result_t result)
 {
@@ -169,14 +164,13 @@ sx128x_result_t sx128x_set_frequency(uint32_t frequency_hz)
 
 static void packet_params_cache_clear(void)
 {
-    memset(s_packet_params_cache, 0, sizeof(s_packet_params_cache));
-    s_packet_params_cache_next = 0U;
+    s_packet_params_valid = false;
+    memset(s_packet_params_command, 0, sizeof(s_packet_params_command));
 }
 
 static sx128x_result_t set_packet_params(uint8_t payload_length)
 {
     uint8_t command[8];
-    uint8_t index;
 
     command[0] = SX128X_OPCODE_SET_PACKET_PARAMS;
     command[4] = SX128X_PACKET_VARIABLE_LENGTH;
@@ -196,26 +190,17 @@ static sx128x_result_t set_packet_params(uint8_t payload_length)
         command[7] = SX128X_FLRC_WHITENING_ENABLE;
     }
 
-    for (index = 0U; index < SX128X_PACKET_PARAMS_CACHE_ENTRIES; ++index) {
-        if (s_packet_params_cache[index].valid &&
-            (memcmp(command, s_packet_params_cache[index].command,
-                    sizeof(command)) == 0)) {
-            ++s_packet_params_cache_hits;
-            return SX128X_RESULT_OK;
-        }
+    if (s_packet_params_valid &&
+        (memcmp(command, s_packet_params_command, sizeof(command)) == 0)) {
+        ++s_packet_params_cache_hits;
+        return SX128X_RESULT_OK;
     }
     {
         sx128x_result_t result = write_command(command, sizeof(command));
 
         if (result == SX128X_RESULT_OK) {
-            sx128x_packet_params_cache_entry_t *entry =
-                &s_packet_params_cache[s_packet_params_cache_next];
-
-            memcpy(entry->command, command, sizeof(command));
-            entry->valid = true;
-            s_packet_params_cache_next =
-                (uint8_t)((s_packet_params_cache_next + 1U) %
-                          SX128X_PACKET_PARAMS_CACHE_ENTRIES);
+            memcpy(s_packet_params_command, command, sizeof(command));
+            s_packet_params_valid = true;
         }
         return result;
     }
@@ -772,6 +757,10 @@ sx128x_result_t sx128x_start_tx(const uint8_t *data, size_t length)
         return SX128X_RESULT_INVALID_ARGUMENT;
     }
 
+    result = sx128x_standby();
+    if (result != SX128X_RESULT_OK) {
+        return result;
+    }
     result = set_packet_params((uint8_t)length);
     if (result != SX128X_RESULT_OK) {
         return result;

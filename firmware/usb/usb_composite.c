@@ -21,6 +21,7 @@
 #include "cdc_acm_core.h"
 #include "cdc_acm_transport.h"
 #include "cmsis_dap_usb.h"
+#include "device_config.h"
 #include "firmware_version.h"
 #include "usbd_msc_core.h"
 #include "usbd_transc.h"
@@ -30,6 +31,7 @@
 /* 描述符接口顺序必须与 usbd_conf.h 一致：MSC(0)、CDC 控制/数据(1/2)、
  * vendor CMSIS-DAP v2(3)。 */
 #define COMPOSITE_CONFIG_DESC_SIZE 121U
+#define MSC_ONLY_CONFIG_DESC_SIZE   32U
 #define USB_DESCRIPTOR_TYPE_IAD    0x0BU
 #define USB_CLASS_VENDOR_SPECIFIC  0xFFU
 #define MS_OS_STRING_INDEX         0xEEU
@@ -70,6 +72,13 @@ typedef struct {
 } composite_config_desc_t;
 
 typedef struct {
+    usb_desc_config config;
+    usb_desc_itf msc_itf;
+    usb_desc_ep msc_epin;
+    usb_desc_ep msc_epout;
+} msc_config_desc_t;
+
+typedef struct {
     uint32_t length;
     uint16_t version;
     uint16_t index;
@@ -86,6 +95,8 @@ typedef struct {
 _Static_assert(sizeof(composite_config_desc_t) ==
                COMPOSITE_CONFIG_DESC_SIZE,
                "Composite USB descriptor size mismatch");
+_Static_assert(sizeof(msc_config_desc_t) == MSC_ONLY_CONFIG_DESC_SIZE,
+               "MSC-only USB descriptor size mismatch");
 _Static_assert(sizeof(ms_os_ext_property_desc_t) == 146U,
                "Microsoft OS property descriptor size mismatch");
 
@@ -93,6 +104,7 @@ static uint8_t composite_init(usb_dev *udev, uint8_t config_index);
 static uint8_t composite_deinit(usb_dev *udev, uint8_t config_index);
 static uint8_t composite_request(usb_dev *udev, usb_req *req);
 static uint8_t composite_control_out(usb_dev *udev);
+static bool s_wireless_slave;
 
 static const usb_desc_dev s_device_desc = {
     .header = {sizeof(usb_desc_dev), USB_DESCTYPE_DEV},
@@ -246,6 +258,42 @@ static const composite_config_desc_t s_config_desc = {
     }
 };
 
+static const msc_config_desc_t s_msc_config_desc = {
+    .config = {
+        .header = {sizeof(usb_desc_config), USB_DESCTYPE_CONFIG},
+        .wTotalLength = MSC_ONLY_CONFIG_DESC_SIZE,
+        .bNumInterfaces = 1U,
+        .bConfigurationValue = 1U,
+        .iConfiguration = 0U,
+        .bmAttributes = 0x80U,
+        .bMaxPower = 0x32U
+    },
+    .msc_itf = {
+        .header = {sizeof(usb_desc_itf), USB_DESCTYPE_ITF},
+        .bInterfaceNumber = USBD_MSC_INTERFACE,
+        .bAlternateSetting = 0U,
+        .bNumEndpoints = 2U,
+        .bInterfaceClass = USB_CLASS_MSC,
+        .bInterfaceSubClass = USB_MSC_SUBCLASS_SCSI,
+        .bInterfaceProtocol = USB_MSC_PROTOCOL_BBB,
+        .iInterface = 0U
+    },
+    .msc_epin = {
+        .header = {sizeof(usb_desc_ep), USB_DESCTYPE_EP},
+        .bEndpointAddress = MSC_IN_EP,
+        .bmAttributes = USB_EP_ATTR_BULK,
+        .wMaxPacketSize = MSC_DATA_PACKET_SIZE,
+        .bInterval = 0U
+    },
+    .msc_epout = {
+        .header = {sizeof(usb_desc_ep), USB_DESCTYPE_EP},
+        .bEndpointAddress = MSC_OUT_EP,
+        .bmAttributes = USB_EP_ATTR_BULK,
+        .wMaxPacketSize = MSC_DATA_PACKET_SIZE,
+        .bInterval = 0U
+    }
+};
+
 static const usb_desc_LANGID s_language = {
     .header = {sizeof(usb_desc_LANGID), USB_DESCTYPE_STR},
     .wLANGID = ENG_LANGID
@@ -353,6 +401,12 @@ void usb_composite_prepare(void)
     uint8_t digit;
     static const char hex[] = "0123456789ABCDEF";
 
+    s_wireless_slave =
+        device_config_get()->device_mode == DEVICE_MODE_WIRELESS_SLAVE;
+    composite_desc.config_desc = s_wireless_slave
+                                     ? (uint8_t *)&s_msc_config_desc
+                                     : (uint8_t *)&s_config_desc;
+
     /* Generate unique 12-character serial number from device ID */
     for (digit = 0U; digit < 8U; ++digit) {
         s_serial.unicode_string[digit] =
@@ -376,6 +430,9 @@ static uint8_t composite_init(usb_dev *udev, uint8_t config_index)
     if (msc_class.init(udev, config_index) != USBD_OK) {
         return USBD_FAIL;
     }
+    if (s_wireless_slave) {
+        return USBD_OK;
+    }
     if (cdc_class.init(udev, config_index) != USBD_OK) {
         (void)msc_class.deinit(udev, config_index);
         return USBD_FAIL;
@@ -391,6 +448,9 @@ static uint8_t composite_init(usb_dev *udev, uint8_t config_index)
 
 static uint8_t composite_deinit(usb_dev *udev, uint8_t config_index)
 {
+    if (s_wireless_slave) {
+        return msc_class.deinit(udev, config_index);
+    }
     uint8_t dap_status =
         cmsis_dap_usb_class.deinit(udev, config_index);
     uint8_t cdc_status = cdc_class.deinit(udev, config_index);
@@ -408,7 +468,7 @@ static uint8_t composite_request(usb_dev *udev, usb_req *req)
     uint8_t recipient = req->bmRequestType & 0x1FU;
     uint8_t index = (uint8_t)req->wIndex;
 
-    if (req->bmRequestType ==
+    if (!s_wireless_slave && req->bmRequestType ==
             (USB_TRX_IN | USB_REQTYPE_VENDOR | USB_RECPTYPE_DEV) &&
         (req->bRequest == MS_OS_VENDOR_CODE) &&
         (req->wValue == 0U) &&
@@ -418,7 +478,7 @@ static uint8_t composite_request(usb_dev *udev, usb_req *req)
             USB_MIN(req->wLength, sizeof(s_ms_compat_id)), 0U);
         return REQ_SUPP;
     }
-    if (req->bmRequestType ==
+    if (!s_wireless_slave && req->bmRequestType ==
             (USB_TRX_IN | USB_REQTYPE_VENDOR | USB_RECPTYPE_ITF) &&
         (req->bRequest == MS_OS_VENDOR_CODE) &&
         (req->wValue == DAP_V2_INTERFACE) &&
@@ -432,28 +492,36 @@ static uint8_t composite_request(usb_dev *udev, usb_req *req)
         if (index == USBD_MSC_INTERFACE) {
             return msc_class.req_process(udev, req);
         }
-        if ((index == CDC_COM_INTERFACE) ||
-            (index == CDC_DATA_INTERFACE)) {
+        if (!s_wireless_slave && ((index == CDC_COM_INTERFACE) ||
+            (index == CDC_DATA_INTERFACE))) {
             return cdc_class.req_process(udev, req);
         }
-        return cmsis_dap_usb_class.req_process(udev, req);
+        if (!s_wireless_slave && (index == DAP_V2_INTERFACE)) {
+            return cmsis_dap_usb_class.req_process(udev, req);
+        }
+        return REQ_NOTSUPP;
     }
     if (recipient == USB_RECPTYPE_EP) {
         if ((index == MSC_IN_EP) || (index == MSC_OUT_EP)) {
             return msc_class.req_process(udev, req);
         }
-        if ((index == CDC_IN_EP) || (index == CDC_OUT_EP) ||
-            (index == CDC_CMD_EP)) {
+        if (!s_wireless_slave && ((index == CDC_IN_EP) ||
+            (index == CDC_OUT_EP) ||
+            (index == CDC_CMD_EP))) {
             return cdc_class.req_process(udev, req);
         }
-        return cmsis_dap_usb_class.req_process(udev, req);
+        if (!s_wireless_slave && ((index == DAP_V2_IN_EP) ||
+            (index == DAP_V2_OUT_EP))) {
+            return cmsis_dap_usb_class.req_process(udev, req);
+        }
+        return REQ_NOTSUPP;
     }
     return REQ_NOTSUPP;
 }
 
 static uint8_t composite_control_out(usb_dev *udev)
 {
-    return cdc_class.ctlx_out != NULL
+    return !s_wireless_slave && cdc_class.ctlx_out != NULL
                ? cdc_class.ctlx_out(udev)
                : USBD_OK;
 }

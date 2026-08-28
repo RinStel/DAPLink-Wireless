@@ -48,6 +48,11 @@ class PyOcdFlashScriptTest(unittest.TestCase):
         self.assertIn("--probe probe-123", result.stdout)
         self.assertIn("daplink_factory.hex", result.stdout)
 
+    def test_uses_release_factory_artifact_by_default(self):
+        result = self.run_script("-WhatIf")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("build\\gcc\\release\\daplink_factory.hex", result.stdout)
+
     def test_rejects_artifact_outside_release_contract(self):
         with tempfile.TemporaryDirectory() as temp:
             artifact = Path(temp) / "unexpected.hex"

@@ -20,7 +20,22 @@ static void assert_leds(status_indicator_leds_t leds,
     assert(leds.blue == blue);
     assert((unsigned int)leds.red + (unsigned int)leds.green +
                (unsigned int)leds.blue <=
-           1U);
+           2U);
+}
+
+static status_indicator_leds_t update(status_indicator_t *indicator,
+                                      status_indicator_mode_t mode,
+                                      status_indicator_activity_t activity,
+                                      uint32_t now_ms)
+{
+    return status_indicator_update(indicator, false, mode, activity, now_ms);
+}
+
+static status_indicator_leds_t update_error(
+    status_indicator_t *indicator, status_indicator_mode_t mode,
+    status_indicator_activity_t activity, uint32_t now_ms)
+{
+    return status_indicator_update(indicator, true, mode, activity, now_ms);
 }
 
 int main(void)
@@ -28,40 +43,81 @@ int main(void)
     status_indicator_t indicator;
 
     status_indicator_init(&indicator, true);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 0U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRED,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 0U),
                 true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 349U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRED,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 199U),
                 true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 350U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRED,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 200U),
                 false, false, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 700U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRED,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 400U),
                 true, false, false);
 
     status_indicator_init(&indicator, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 0U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 0U),
                 false, false, true);
-    assert_leds(status_indicator_update(&indicator, true, true, true, 10U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 20U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 1019U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, true, true, 1020U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 999U),
                 false, false, true);
-
-    status_indicator_init(&indicator, false);
-    assert_leds(status_indicator_update(&indicator, true, false, true, 0U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, false, true, 100U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, true, false, true, 1099U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, false, true, 1100U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, false, true, 2099U),
-                true, false, false);
-    assert_leds(status_indicator_update(&indicator, false, false, true, 2100U),
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 1000U),
+                false, false, false);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_SLAVE,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 0U),
                 false, true, false);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRED,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 0U),
+                false, true, true);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRED,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 1000U),
+                false, false, false);
+
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_COMMUNICATION, 0U),
+                false, false, true);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_COMMUNICATION, 449U),
+                false, false, true);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_COMMUNICATION, 450U),
+                false, false, false);
+
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_PROGRAMMING, 0U),
+                false, false, true);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_PROGRAMMING, 149U),
+                false, false, true);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_PROGRAMMING, 150U),
+                false, false, false);
+
+    status_indicator_init(&indicator, false);
+    assert_leds(update_error(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                             STATUS_INDICATOR_ACTIVITY_NONE, 0U),
+                true, false, false);
+    assert_leds(update_error(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                             STATUS_INDICATOR_ACTIVITY_NONE, 499U),
+                true, false, false);
+    assert_leds(update_error(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                             STATUS_INDICATOR_ACTIVITY_NONE, 500U),
+                false, false, false);
+    assert_leds(update_error(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                             STATUS_INDICATOR_ACTIVITY_NONE, 1000U),
+                true, false, false);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 1001U),
+                true, false, false);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 2000U),
+                true, false, false);
+    assert_leds(update(&indicator, STATUS_INDICATOR_MODE_WIRELESS_HOST,
+                       STATUS_INDICATOR_ACTIVITY_NONE, 2001U),
+                false, false, true);
 
     return 0;
 }

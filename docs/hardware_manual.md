@@ -127,7 +127,7 @@ CLion Release profile 的 `flash_factory`、`flash_bootloader`、`flash_slot_a` 
 `CONFIG.TXT` 写成精确的 `ENTER_DFU=1` 并安全弹出，记录 `28E9:1290` 断开、
 `28E9:1291` DFU 枚举、蓝灯等待/写入、青色校验、绿色约 500 ms 和自动复位。拔线或
 掉电覆盖擦除、写入、Manifest 三个阶段，确认旧槽仍可启动；烧录不确认的候选镜像，
-确认三次复位后红蓝交替并回退。最后按住 `KEYA` 上电，确认无有效应用时仍能进入
+确认三次复位后红蓝交替约 2 s 并回退。最后按住 `KEYA` 上电，确认无有效应用时仍能进入
 恢复 DFU，并验证恢复模式可降级但不能绕过型号、地址、长度、向量表或 CRC32 检查。
 
 USB DFU 验收项目必须记录板卡序列号、工具版本、VID/PID、LED 实际颜色和 Flash 地址；没有

@@ -28,6 +28,7 @@ void usb_config_disk_process(void);
 /* 仅在 USB 枚举完成且最近一次配置应用成功后返回 true。 */
 bool usb_config_disk_configured(void);
 bool usb_config_disk_dfu_reset_pending(void);
+bool usb_config_disk_reset_pending(void);
 
 void usb_config_disk_irq(void);
 void usb_config_disk_hp_irq(void);

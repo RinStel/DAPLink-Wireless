@@ -28,7 +28,7 @@
 #define RADIO_SPI                    SPI0
 #define RADIO_SPI_TIMEOUT_MS         10U
 #define RADIO_RESET_HOLD_MS          1U
-#define RADIO_RESET_READY_TIMEOUT_MS 20U
+#define RADIO_RESET_READY_TIMEOUT_MS 100U
 
 static bool timeout_expired(uint32_t start, uint32_t timeout_ms)
 {
@@ -96,9 +96,14 @@ radio_result_t radio_hal_init(void)
 radio_result_t radio_hal_reset(uint32_t timeout_ms)
 {
     radio_hal_frontend_set(RADIO_FRONTEND_STANDBY);
+
+    /* NSS 保持高电平，避免复位期间误触发 SPI 事务。 */
+    gpio_bit_set(BOARD_RF_NSS_PORT, BOARD_RF_NSS_PIN);
     gpio_bit_reset(BOARD_RF_NRESET_PORT, BOARD_RF_NRESET_PIN);
     board_delay_ms(RADIO_RESET_HOLD_MS);
     gpio_bit_set(BOARD_RF_NRESET_PORT, BOARD_RF_NRESET_PIN);
+
+    /* tREADY 由 BUSY 握手覆盖，无需额外固定延时。 */
     return radio_hal_wait_ready(timeout_ms);
 }
 

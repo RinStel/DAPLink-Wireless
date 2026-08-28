@@ -77,20 +77,6 @@ static void configuration_button_process(void)
     }
 }
 
-static bool alive_indicator_on(void)
-{
-    static uint32_t last_toggle;
-    static bool led_on;
-    uint32_t now = board_millis();
-
-    if ((uint32_t)(now - last_toggle) >= 500U) {
-        last_toggle = now;
-        led_on = !led_on;
-    }
-
-    return led_on;
-}
-
 static void status_indicator_apply(status_indicator_leds_t leds)
 {
     board_led_set(BOARD_LED_RED, leds.red);
@@ -98,14 +84,29 @@ static void status_indicator_apply(status_indicator_leds_t leds)
     board_led_set(BOARD_LED_BLUE, leds.blue);
 }
 
+static status_indicator_mode_t status_indicator_mode_get(void)
+{
+    switch (device_config_get()->device_mode) {
+    case DEVICE_MODE_WIRELESS_HOST:
+        return STATUS_INDICATOR_MODE_WIRELESS_HOST;
+    case DEVICE_MODE_WIRELESS_SLAVE:
+        return STATUS_INDICATOR_MODE_WIRELESS_SLAVE;
+    case DEVICE_MODE_WIRED:
+    default:
+        return STATUS_INDICATOR_MODE_WIRED;
+    }
+}
+
 int main(void)
 {
-    bool activity;
+    bool communication_activity;
     bool bridge_ready;
-    bool heartbeat_on;
     bool initialization_failed;
     bool runtime_error;
     bool watchdog_ready;
+    status_indicator_activity_t activity;
+    status_indicator_mode_t mode;
+    serial_bridge_status_t bridge_status;
     boot_confirm_once_t boot_confirm_guard = {false, false};
     status_indicator_t indicator;
     status_indicator_leds_t leds;
@@ -123,8 +124,11 @@ int main(void)
     /* Start watchdog AFTER all initialization to avoid timeout during init */
     watchdog_ready = board_watchdog_start();
     initialization_failed = !bridge_ready || !watchdog_ready;
+    mode = status_indicator_mode_get();
     status_indicator_init(&indicator, initialization_failed);
-    leds = status_indicator_update(&indicator, false, false, false,
+    leds = status_indicator_update(&indicator, false,
+                                   mode,
+                                   STATUS_INDICATOR_ACTIVITY_NONE,
                                    board_millis());
     status_indicator_apply(leds);
 
@@ -132,6 +136,8 @@ int main(void)
         usb_config_disk_process();
         if (usb_config_disk_dfu_reset_pending()) {
             boot_mailbox_request_dfu();
+        }
+        if (usb_config_disk_reset_pending()) {
             board_usb_connect(false);
             board_delay_ms(100U);
             NVIC_SystemReset();
@@ -147,13 +153,17 @@ int main(void)
                 runtime_error = true;
             }
         }
-        activity = serial_bridge_activity_led();
-        heartbeat_on = false;
-        if (!initialization_failed && !runtime_error) {
-            heartbeat_on = alive_indicator_on();
+        communication_activity = serial_bridge_activity_led();
+        serial_bridge_status_get(&bridge_status);
+        activity = communication_activity
+                       ? STATUS_INDICATOR_ACTIVITY_COMMUNICATION
+                       : STATUS_INDICATOR_ACTIVITY_NONE;
+        if (bridge_status.swd_request_active) {
+            activity = STATUS_INDICATOR_ACTIVITY_PROGRAMMING;
         }
-        leds = status_indicator_update(&indicator, runtime_error, activity,
-                                       heartbeat_on, board_millis());
+        mode = status_indicator_mode_get();
+        leds = status_indicator_update(&indicator, runtime_error, mode,
+                                       activity, board_millis());
         status_indicator_apply(leds);
         board_watchdog_feed();
     }

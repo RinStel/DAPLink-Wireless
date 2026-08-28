@@ -4,10 +4,11 @@
 
 DAPLink-Wireless 使用两块相同硬件构成无线 CMSIS-DAP v2 调试器。主控为
 `GD32F303CCT6`，无线模块为基于 SX1281 的 `E28-2G4M20SX`。项目提供有线、
-无线主机和无线从机三种设备模式，并通过 USB 同时提供 CMSIS-DAP v2 Bulk、
-CDC ACM 虚拟串口和 MSC 配置磁盘。
+无线主机和无线从机三种设备模式。`WIRED` 和 `WIRELESS_HOST` 通过 USB 提供
+CMSIS-DAP v2 Bulk、CDC ACM 虚拟串口和 MSC 配置磁盘；`WIRELESS_SLAVE` 仅提供
+MSC 配置磁盘。
 
-当前状态：固件版本为 `1.0.0`，无线链路协议版本为 `v2`，
+当前状态：无线链路协议版本为 `v2`，
 无线帧头偏移 2 的协议字段为 `02`。现有发布文档使用硬件版本 `v0.5`；
 EasyEDA 当前读取到的 `Board_V1.0` 与项目文档中的 `v0.5` 对应关系为 `待确认：`。
 
@@ -57,7 +58,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 | --- | --- |
 | `WIRED` | USB CDC 与目标 USART0 直接透传；USB CMSIS-DAP 请求在本板执行 |
 | `WIRELESS_HOST` | USB CMSIS-DAP 和 CDC 请求经 SX1281 发送到无线从机 |
-| `WIRELESS_SLAVE` | 无线请求在本板执行 SWD，并与目标 USART0 双向透传 |
+| `WIRELESS_SLAVE` | 无线请求在本板执行 SWD，并与目标 USART0 双向透传；USB 仅暴露 MSC 配置磁盘 |
 
 主机拥有无线链路的控制权，从机不主动修改 profile、频道或串口参数。串口数据
 和行参数使用递增序号、ACK、超时重传和重复帧抑制；无线单帧最多承载 110 字节。
@@ -85,14 +86,14 @@ USART0；无线主机通过可靠控制帧同步给无线从机。因此不使�
 | 驱动 | `target_uart.c`、`target_uart_ring.c` | USART0 DMA 环形缓冲区和 TX 分段 |
 | 驱动 | `target_swd.c` | SWCLK、SWDIO 和 NRST 时序 |
 | 板级 | `board.c` | GPIO、SysTick、DWT 时基和设备 ID |
-| USB | `usb_composite.c` | MSC、CDC、CMSIS-DAP v2 组合描述符 |
+| USB | `usb_composite.c` | 按设备模式选择 MSC-only 或 MSC、CDC、CMSIS-DAP v2 描述符 |
 | USB | `cmsis_dap_usb.c` | CMSIS-DAP v2 Bulk 传输适配 |
 | 配置 | `usb_config_disk.c` | 虚拟 FAT12 配置盘 |
 | 配置 | `device_config.c`、`device_config_storage.c` | 运行配置和 Flash 双槽持久化 |
 
 ## USB 组合设备
 
-USB FS 枚举为 MSC + CDC ACM + CMSIS-DAP 组合设备：
+`WIRED` 和 `WIRELESS_HOST` 的 USB FS 枚举为 MSC + CDC ACM + CMSIS-DAP 组合设备：
 
 - MSC 暴露 `CONFIG.TXT` 和 `STATUS.TXT`。
 - CDC ACM 提供目标串口虚拟端口。
@@ -101,6 +102,10 @@ USB FS 枚举为 MSC + CDC ACM + CMSIS-DAP 组合设备：
 - Windows 8 及以上可通过 Microsoft OS 1.0 WCID 自动为 v2 接口绑定 WinUSB。
 - USBFS PMA 为 512 字节；MSC bulk 端点使用 16 字节包，CDC 数据端点和 DAP v2
   端点使用 64 字节包。MSC 配置盘仍然保留，逻辑介质块仍为 512 字节。
+
+`WIRELESS_SLAVE` 的 USB FS 枚举只包含 1 个 MSC 接口和 2 个 MSC Bulk 端点。
+该模式不暴露 CDC 或 CMSIS-DAP 接口和端点；从机的 SWD 与目标串口服务由无线主机
+转发。修改 `MODE` 后，设备保存配置并复位，再按新模式重新枚举 USB。
 
 量产前必须替换 GD32 示例 VID/PID，并验证 Windows、Linux 和 macOS 的枚举、
 休眠恢复和安全弹出行为。
@@ -149,6 +154,11 @@ ENTER_DFU=1
 回退到旧确认槽。等待、写入和错误状态没有空闲超时，实践中可拔插 USB 重新枚举。
 STAT_LED 逻辑状态为：蓝色等待/写入、青色校验、绿色成功/试运行、红色错误、红蓝
 交替回退。
+
+应用正常运行时根据模式选择颜色：`WIRELESS_HOST` 为蓝色，`WIRELESS_SLAVE`
+为绿色，`WIRED` 为绿蓝同时点亮的青色。空闲时每 1000 ms 翻转一次；无烧录但有
+通信时每 450 ms 翻转一次；执行 SWD 烧录时每 150 ms 翻转一次。应用启动初始化
+失败时红灯每 200 ms 翻转一次，运行错误时红灯每 500 ms 翻转一次。
 
 板载按键通过同一双槽 Flash 事务修改配置：短按依次切换自动速率和固定速率，
 长按 2 秒依次切换 `WIRED`、`WIRELESS_HOST`、`WIRELESS_SLAVE`。SWD 事务进行

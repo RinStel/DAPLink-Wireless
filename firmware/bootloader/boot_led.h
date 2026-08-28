@@ -23,5 +23,6 @@ typedef enum {
 } boot_led_state_t;
 
 boot_led_rgb_t boot_led_update(boot_led_state_t state, uint32_t now_ms);
+bool boot_led_rollback_active(uint32_t started_at_ms, uint32_t now_ms);
 
 #endif

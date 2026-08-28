@@ -82,8 +82,8 @@ def discover_msc_volume(candidates: Sequence[str | Path] | None = None) -> Path:
 def write_enter_dfu(config_path: str | Path) -> Path:
     """Write the one-shot action and flush it before returning."""
     path = Path(config_path)
-    updated = set_enter_dfu(path.read_text(), True)
-    with path.open("w", encoding="ascii", newline="") as stream:
+    updated = set_enter_dfu(path.read_text(encoding="utf-8"), True)
+    with path.open("w", encoding="utf-8", newline="") as stream:
         stream.write(updated)
         stream.flush()
         try:
@@ -102,7 +102,19 @@ def wait_for_volume_disappear(volume: str | Path, *, timeout: float = 15.0,
     """Wait until CONFIG.TXT is no longer visible after the reset request."""
     config = Path(volume) / CONFIG_FILE
     deadline = clock() + timeout
-    while config.exists():
+    while True:
+        try:
+            visible = config.exists()
+        except OSError as exc:
+            # Windows can report ERROR_DISK_CHANGED (1006) for the stale
+            # path during USB volume removal. That is the disappearance we
+            # are waiting for; unrelated filesystem errors remain failures.
+            if (getattr(exc, "winerror", None) != 1006 and
+                    getattr(exc, "errno", None) != 1006):
+                raise
+            visible = False
+        if not visible:
+            return
         if clock() >= deadline:
             raise TimeoutError("MSC volume did not disappear after ENTER_DFU")
         sleeper(poll_interval)

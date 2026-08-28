@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 from tools.daplink_updater import (
     DfuInfo,
@@ -13,11 +14,21 @@ from tools.daplink_updater import (
     poll_dfu_device,
     run_dfu_download,
     set_enter_dfu,
+    write_enter_dfu,
+    wait_for_volume_disappear,
 )
 from tools.dwup_format import build_package, decode_package
 
 
 class DaplinkUpdaterTest(unittest.TestCase):
+    def test_volume_disconnect_error_counts_as_disappearance(self):
+        disconnect_error = OSError(1006, "The volume has been externally altered")
+
+        with patch("tools.daplink_updater.Path.exists",
+                   side_effect=disconnect_error):
+            wait_for_volume_disappear(
+                "D:\\", clock=lambda: 0.0, sleeper=lambda _interval: None)
+
     def test_cli_has_one_update_workflow(self):
         result = subprocess.run(
             [sys.executable, "tools/daplink_updater.py", "--help"],
@@ -38,6 +49,19 @@ class DaplinkUpdaterTest(unittest.TestCase):
             "addr=0x08021000;version=799;mode=normal")
         self.assertEqual(info.inactive_slot, "B")
         self.assertEqual(info.load_address, 0x08021000)
+
+    def test_write_enter_dfu_preserves_utf8_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "CONFIG.TXT"
+            path.write_text("# DAPLink-Wireless 配置\r\nMODE=WIRED\r\n",
+                            encoding="utf-8", newline="")
+
+            write_enter_dfu(path)
+
+            updated = path.read_text(encoding="utf-8")
+            self.assertIn("# DAPLink-Wireless 配置", updated)
+            self.assertIn("MODE=WIRED", updated)
+            self.assertIn("ENTER_DFU=1", updated)
 
     def test_listing_parses_metadata_inside_name_field(self):
         info = parse_dfu_listing(

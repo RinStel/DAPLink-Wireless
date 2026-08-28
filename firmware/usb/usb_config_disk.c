@@ -71,6 +71,7 @@ static device_config_t s_refresh_previous;
 static bool s_last_apply_ok;
 static config_apply_result_t s_apply_result;
 static bool s_dfu_reset_pending;
+static bool s_mode_reset_pending;
 
 static uint8_t s_inquiry_data[USBD_STD_INQUIRY_LENGTH] = {
     0x00U, 0x80U, 0x02U, 0x02U, 31U, 0x00U, 0x00U, 0x00U,
@@ -561,6 +562,7 @@ bool usb_config_disk_init(void)
     s_last_apply_ok = true;
     s_apply_result = CONFIG_APPLY_OK;
     s_dfu_reset_pending = false;
+    s_mode_reset_pending = false;
 
     rcu_usb_clock_config(RCU_CKUSB_CKPLL_DIV2_5);
     rcu_periph_clock_enable(RCU_USBD);
@@ -591,8 +593,7 @@ void usb_config_disk_process(void)
     bool enter_dfu = false;
     dfu_config_command_result_t dfu_command;
 
-    /* USB DAP 流量优先。配置变更必须等待 MSC 和 CMSIS-DAP 都空闲后才断开
-     * 复合设备。 */
+    /* USB 业务流量优先。配置变更必须等待当前 USB 事务完成后才断开设备。 */
     cmsis_dap_usb_process();
 
     if (s_refresh_requested) {
@@ -614,6 +615,14 @@ void usb_config_disk_process(void)
                 (void)serial_bridge_apply_config();
             } else {
                 s_apply_result = CONFIG_APPLY_OK;
+            }
+            if (s_last_apply_ok &&
+                (s_refresh_previous.device_mode !=
+                 device_config_get()->device_mode)) {
+                s_mode_reset_pending = true;
+                s_disk_dirty = false;
+                s_refresh_requested = false;
+                return;
             }
             usb_irqs_enable(true);
         } else {
@@ -715,6 +724,12 @@ void usb_config_disk_process(void)
     s_last_apply_ok = true;
     s_apply_result = enter_dfu ? CONFIG_APPLY_ENTER_DFU : CONFIG_APPLY_OK;
     s_dfu_reset_pending = enter_dfu;
+    if (previous.device_mode != device_config_get()->device_mode) {
+        s_mode_reset_pending = true;
+        s_disk_dirty = false;
+        s_refresh_requested = false;
+        return;
+    }
     disk_rebuild_and_reconnect();
 }
 
@@ -726,6 +741,11 @@ bool usb_config_disk_configured(void)
 bool usb_config_disk_dfu_reset_pending(void)
 {
     return s_dfu_reset_pending;
+}
+
+bool usb_config_disk_reset_pending(void)
+{
+    return s_dfu_reset_pending || s_mode_reset_pending;
 }
 
 void usb_config_disk_irq(void)

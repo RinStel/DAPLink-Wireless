@@ -284,7 +284,8 @@ $tests = [ordered]@{
         label = "USB composite descriptor"
         analyzer = $true
         defines = @("GD32F30X_HD")
-        includes = @("firmware/app", "firmware/bsp", "firmware/usb")
+        includes = @("firmware/app", "firmware/bsp", "firmware/usb",
+                     "firmware/drivers/radio")
         system_includes = @(
             "vendor/GD32_CMSIS",
             "vendor/GD32_CMSIS/GD/GD32F30x/Include",

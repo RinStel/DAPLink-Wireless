@@ -221,8 +221,13 @@ int main(void)
     }
     if (decision.action == BOOT_ACTION_ROLLBACK_TO_A ||
         decision.action == BOOT_ACTION_ROLLBACK_TO_B) {
-        boot_board_set_led(boot_led_update(BOOT_LED_ROLLBACK,
-                                           boot_board_millis()));
+        uint32_t rollback_started_at = boot_board_millis();
+
+        while (boot_led_rollback_active(rollback_started_at,
+                                        boot_board_millis())) {
+            boot_board_set_led(boot_led_update(BOOT_LED_ROLLBACK,
+                                               boot_board_millis()));
+        }
         if (boot_state_rollback() && boot_state_load(&state)) {
             boot_start_slot(state.confirmed_slot);
         }

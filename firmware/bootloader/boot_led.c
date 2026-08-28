@@ -1,5 +1,12 @@
 #include "boot_led.h"
 
+#define BOOT_LED_ROLLBACK_MS 2000U
+
+bool boot_led_rollback_active(uint32_t started_at_ms, uint32_t now_ms)
+{
+    return (uint32_t)(now_ms - started_at_ms) < BOOT_LED_ROLLBACK_MS;
+}
+
 boot_led_rgb_t boot_led_update(boot_led_state_t state, uint32_t now_ms)
 {
     boot_led_rgb_t leds = {false, false, false};

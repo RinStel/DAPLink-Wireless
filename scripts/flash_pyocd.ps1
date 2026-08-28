@@ -2,8 +2,7 @@
 # Flash one address-bearing GCC artifact through pyOCD.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Artifact,
+    [string]$Artifact = ".\build\gcc\release\daplink_factory.hex",
     [string]$Target = "stm32f103rc",
     [string]$Probe = "",
     [string]$Frequency = "1M",

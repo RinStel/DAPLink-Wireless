@@ -38,7 +38,9 @@
 #define BRIDGE_PAYLOAD_SIZE         RADIO_PROTOCOL_PAYLOAD_SIZE
 #define BRIDGE_FRAME_SIZE           RADIO_PROTOCOL_FRAME_SIZE
 #define BRIDGE_ACK_TIMEOUT_MS       120U
-#define BRIDGE_SWD_ACK_TIMEOUT_MS   3500U
+#define BRIDGE_TX_TURNAROUND_DELAY_US 200U
+#define BRIDGE_SWD_ACK_TIMEOUT_MS   600U
+#define BRIDGE_SWD_RESPONSE_TIMEOUT_MS 500U
 #define BRIDGE_ACTIVITY_MS          80U
 #define BRIDGE_MAX_RETRIES          5U
 #define BRIDGE_RECOVERY_DELAY_MS    250U
@@ -217,8 +219,15 @@ static bool frame_transmit(const uint8_t *frame, uint8_t length,
 {
     /* 同时只能有一个无线发送。TX_DONE 清除 s_tx_kind 并开启接收窗口，
      * 然后才设置 ACK 截止时间。 */
-    if ((s_tx_kind != TX_NONE) ||
-        (sx128x_start_tx(frame, length) != SX128X_RESULT_OK)) {
+    if (s_tx_kind != TX_NONE) {
+        return false;
+    }
+    if (kind == TX_ACK) {
+        /* 对端在自己的 TX_DONE 中立即重开接收，只需覆盖那段 SPI 序列
+         * （约 15 字节 + BUSY 握手）。毫秒级阻塞会直接吃掉烧录吞吐。 */
+        board_delay_us(BRIDGE_TX_TURNAROUND_DELAY_US);
+    }
+    if (sx128x_start_tx(frame, length) != SX128X_RESULT_OK) {
         return false;
     }
     s_tx_kind = kind;
@@ -484,9 +493,23 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
         if (s_pending && (sequence == s_pending_sequence)) {
             bridge_frame_type_t pending_type =
                 (bridge_frame_type_t)s_pending_frame[3];
-            s_pending = false;
-            s_waiting_ack = false;
-            s_retries = 0U;
+            bool swd_pending_response =
+                (pending_type == BRIDGE_FRAME_SWD_COMMAND) ||
+                (pending_type == RADIO_FRAME_SWD_BLOCK);
+
+            /* SWD 的无线 ACK 只确认请求帧到达；必须等匹配的隧道响应，
+             * 否则响应丢失时主机不会重发请求。 */
+            if (!swd_pending_response) {
+                s_pending = false;
+                s_waiting_ack = false;
+                s_retries = 0U;
+            } else {
+                /* 请求帧已经到达远端，但隧道响应仍可能丢失。缩短等待窗口，
+                 * 让同一事务在 CMSIS-DAP 总超时内完成多次端到端重试。 */
+                s_waiting_ack = true;
+                s_deadline = board_millis() +
+                             BRIDGE_SWD_RESPONSE_TIMEOUT_MS;
+            }
             if (pending_type == BRIDGE_FRAME_PROFILE_SWITCH) {
                 sx128x_profile_t profile =
                     (sx128x_profile_t)
@@ -655,7 +678,8 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
             s_profile_trial = false;
         }
         activity_signal();
-    } else if ((type == BRIDGE_FRAME_SWD_COMMAND) &&
+    } else if (((type == BRIDGE_FRAME_SWD_COMMAND) ||
+                (type == RADIO_FRAME_SWD_BLOCK)) &&
                (config->device_mode == DEVICE_MODE_WIRELESS_SLAVE) &&
                !s_pending) {
         /* Re-send the cached result if the request ACK or reply was lost. */
@@ -1190,8 +1214,9 @@ static bool swd_command_queue(const uint8_t *payload, uint8_t length)
 {
     device_mode_t mode = device_config_get()->device_mode;
 
-    /* SWD 桥一次只接受一个事务；无线请求还必须进入可靠无线队列。 */
-    if ((length == 0U) || s_pending || (s_tx_kind != TX_NONE)) {
+    /* SWD 桥一次只接受一个事务。无线 ACK 仍在发送时可以先进入可靠
+     * 队列，serial_bridge_process() 会在 TX_DONE 后开始实际发送。 */
+    if ((length == 0U) || s_pending) {
         return false;
     }
     if (!swd_bridge_service_begin(mode, payload, length)) {
@@ -1293,8 +1318,7 @@ bool serial_bridge_swd_transfers(
     uint8_t payload[BRIDGE_PAYLOAD_SIZE];
     device_mode_t mode = device_config_get()->device_mode;
 
-    if ((transfers == NULL) || (count == 0U) ||
-        s_pending || (s_tx_kind != TX_NONE)) {
+    if ((transfers == NULL) || (count == 0U) || s_pending) {
         return false;
     }
     if ((mode == DEVICE_MODE_WIRED) ||

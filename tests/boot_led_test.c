@@ -16,6 +16,9 @@ int main(void)
     assert(leds.blue && leds.green);
     leds = boot_led_update(BOOT_LED_SUCCESS, 0U);
     assert(leds.green && !leds.red && !leds.blue);
+    assert(boot_led_rollback_active(1000U, 1000U));
+    assert(boot_led_rollback_active(1000U, 2999U));
+    assert(!boot_led_rollback_active(1000U, 3000U));
     leds = boot_led_update(BOOT_LED_FATAL, 0U);
     assert(leds.red && !leds.green && !leds.blue);
     return 0;
