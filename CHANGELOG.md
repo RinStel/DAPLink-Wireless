@@ -1,5 +1,9 @@
 ﻿# Changelog
 
+## 1.0.26 - 2026-08-29
+
+- 放宽官方 `ExecuteCommands` 聚合子命令数量上限至请求包可容纳的 32 条，避免 Keil 批量编程请求被错误判为无效。
+
 ## 1.0.25 - 2026-08-29
 
 - 修正官方 `ExecuteCommands` 子命令长度解析，覆盖 `DAP_HostStatus`、`DAP_Delay` 和 `DAP_SWD_Configure`，避免 Keil 批量编程请求错位。

@@ -883,7 +883,7 @@ bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
         return false;
     }
     if (request[0] == 0x7FU) {
-        if (length < 2U || request[1] == 0U || request[1] > 8U ||
+        if (length < 2U || request[1] == 0U || request[1] > 32U ||
             length > sizeof(s_parent_request)) {
             s_response[0] = 0xFFU; response_finish(1U); return true;
         }
