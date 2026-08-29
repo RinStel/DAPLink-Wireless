@@ -120,13 +120,16 @@ static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
     uint16_t n, i;
     if (avail == 0U) return false;
     switch (p[0]) {
-    case DAP_INFO: case DAP_CONNECT: case DAP_DISCONNECT: case DAP_HOST_STATUS:
+    case DAP_INFO: case DAP_CONNECT: case DAP_DISCONNECT:
     case DAP_TRANSFER_CONFIGURE: case DAP_TRANSFER_ABORT: case DAP_WRITE_ABORT:
-    case DAP_DELAY: case DAP_RESET_TARGET: case DAP_SWJ_CLOCK:
-    case DAP_SWD_CONFIGURE: case DAP_VENDOR_STATUS:
-        n = (p[0] == DAP_INFO || p[0] == DAP_CONNECT || p[0] == DAP_HOST_STATUS || p[0] == DAP_SWD_CONFIGURE) ? 2U :
+    case DAP_RESET_TARGET: case DAP_SWJ_CLOCK:
+    case DAP_VENDOR_STATUS:
+        n = (p[0] == DAP_INFO || p[0] == DAP_CONNECT) ? 2U :
             (p[0] == DAP_TRANSFER_CONFIGURE ? 6U : (p[0] == DAP_WRITE_ABORT ? 6U : (p[0] == DAP_SWJ_CLOCK ? 5U : 1U)));
         break;
+    case DAP_HOST_STATUS: n = 3U; break;
+    case DAP_DELAY: n = 3U; break;
+    case DAP_SWD_CONFIGURE: n = 2U; break;
     case DAP_SWJ_PINS: n = 7U; break;
     case DAP_SWJ_SEQUENCE:
         if (avail < 2U) return false;

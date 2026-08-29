@@ -1,5 +1,9 @@
 ﻿# Changelog
 
+## 1.0.25 - 2026-08-29
+
+- 修正官方 `ExecuteCommands` 子命令长度解析，覆盖 `DAP_HostStatus`、`DAP_Delay` 和 `DAP_SWD_Configure`，避免 Keil 批量编程请求错位。
+
 ## 1.0.24 - 2026-08-29
 
 - 按 Arm CMSIS-DAP 官方语义实现 `DAP_ExecuteCommands (0x7F)` 聚合处理，并在 USB 传输层支持 `DAP_QueueCommands (0x7E)` 到 Execute 的转换。
