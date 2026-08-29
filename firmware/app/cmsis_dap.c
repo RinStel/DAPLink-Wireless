@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "board.h"
+#include "dap_diagnostics.h"
 #include "firmware_version.h"
 #include "serial_bridge.h"
 #include "target_swd.h"
@@ -44,6 +45,7 @@
 #define DAP_SWD_CONFIGURE         0x13U
 #define DAP_SWD_SEQUENCE          0x1DU
 #define DAP_VENDOR_STATUS         0x80U
+#define DAP_VENDOR_TRACE          0x81U
 
 #define DAP_INFO_VENDOR           0x01U
 #define DAP_INFO_PRODUCT          0x02U
@@ -68,6 +70,9 @@
 #define DAP_OPERATION_TIMEOUT_MS  4000U
 #define DAP_MAX_TRANSFERS         16U
 #define DAP_VENDOR_STATUS_VERSION 5U
+#ifndef CMSIS_DAP_ADVERTISE_ATOMIC_COMMANDS
+#define CMSIS_DAP_ADVERTISE_ATOMIC_COMMANDS 0
+#endif
 
 typedef enum {
     DAP_STATE_IDLE = 0,
@@ -76,7 +81,8 @@ typedef enum {
     DAP_STATE_RESET,
     DAP_STATE_COMMAND,
     DAP_STATE_PINS,
-    DAP_STATE_SWD_SEQUENCE
+    DAP_STATE_SWD_SEQUENCE,
+    DAP_STATE_DELAY
 } dap_state_t;
 
 static uint8_t s_request[CMSIS_DAP_PACKET_SIZE];
@@ -112,8 +118,11 @@ static uint8_t s_parent_response_offset;
 static bool s_parent_active;
 
 static void response_finish(uint8_t length);
+static void response_invalid(void);
+static void response_error(uint8_t command);
 static bool parent_start_next(void);
 static void command_dispatch(void);
+
 
 static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
 {
@@ -147,7 +156,7 @@ static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
         }
         break;
     case DAP_TRANSFER:
-        if (avail < 3U || p[2] == 0U) return false;
+        if (avail < 3U) return false;
         n = 3U;
         for (i = 0U; i < p[2]; ++i) {
             if (n >= avail) return false;
@@ -156,9 +165,11 @@ static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
         }
         break;
     case DAP_TRANSFER_BLOCK:
-        if (avail < 5U || p[2] == 0U || p[3] != 0U) return false;
+        if (avail < 5U || p[3] != 0U) return false;
         n = 5U;
-        if ((p[4] & 0x02U) == 0U) n = (uint16_t)(n + (uint16_t)p[2] * 4U);
+        if (p[2] != 0U && (p[4] & 0x02U) == 0U) {
+            n = (uint16_t)(n + (uint16_t)p[2] * 4U);
+        }
         break;
     default: n=1U; break;
     }
@@ -226,6 +237,31 @@ static void command_vendor_status(void)
     encode_u32_le(&s_response[39], status.invalid_radio_frames);
     encode_u32_le(&s_response[43], status.peer_session_changes);
     response_finish(47U);
+}
+
+static void command_vendor_trace(void)
+{
+#if CMSIS_DAP_DIAGNOSTICS_ENABLE
+    s_response[0] = DAP_VENDOR_TRACE;
+    s_response[1] = 1U;
+    if ((s_request_length >= 2U) && (s_request[1] == 0U)) {
+        dap_diagnostics_reset();
+        s_response[2] = DAP_OK;
+        response_finish(3U);
+    } else if ((s_request_length >= 3U) && (s_request[1] == 1U)) {
+        s_response[2] = s_request[2];
+        if (dap_diagnostics_page(s_request[2], &s_response[4], 60U) == 60U) {
+            s_response[3] = 60U;
+            response_finish(64U);
+        } else {
+            response_error(DAP_VENDOR_TRACE);
+        }
+    } else {
+        response_error(DAP_VENDOR_TRACE);
+    }
+#else
+    response_invalid();
+#endif
 }
 
 static void response_finish(uint8_t length)
@@ -322,6 +358,9 @@ static void command_info(void)
     } else if (info_id == DAP_INFO_CAPABILITIES) {
         s_response[1] = 2U;
         s_response[2] = 0x01U;
+#if CMSIS_DAP_ADVERTISE_ATOMIC_COMMANDS
+        s_response[2] |= 0x10U;
+#endif
         s_response[3] = 0x01U;
         response_finish(4U);
     } else if (info_id == DAP_INFO_PACKET_COUNT) {
@@ -434,7 +473,21 @@ static bool transfer_parse(void)
         return false;
     }
     count = s_request[2];
-    if ((count == 0U) || (count > DAP_MAX_TRANSFERS)) {
+    if (count > DAP_MAX_TRANSFERS) {
+        return false;
+    }
+    if (count == 0U) {
+        s_transfer_count = 0U;
+        s_transfer_done = 0U;
+        s_transfer_block = false;
+        s_write_abort = false;
+        s_response[0] = DAP_TRANSFER;
+        s_response[1] = 0U;
+        s_response[2] = 0U;
+        s_response_length = 3U;
+        return true;
+    }
+    if (count > DAP_MAX_TRANSFERS) {
         return false;
     }
     for (index = 0U; index < count; ++index) {
@@ -493,10 +546,22 @@ static bool transfer_block_parse(void)
     count = (uint16_t)s_request[2] |
             ((uint16_t)s_request[3] << 8);
     request = s_request[4];
-    if ((count == 0U) || (count > DAP_MAX_TRANSFERS) ||
+    if ((count > DAP_MAX_TRANSFERS) ||
         ((request & 0xF0U) != 0U) ||
         (((request & DAP_TRANSFER_RNW) != 0U) && (count > 15U))) {
         return false;
+    }
+    if (count == 0U) {
+        s_transfer_count = 0U;
+        s_transfer_done = 0U;
+        s_transfer_block = true;
+        s_write_abort = false;
+        s_response[0] = DAP_TRANSFER_BLOCK;
+        s_response[1] = 0U;
+        s_response[2] = 0U;
+        s_response[3] = 0U;
+        s_response_length = 4U;
+        return true;
     }
     for (index = 0U; index < count; ++index) {
         s_transfers[index].request = request & 0x0FU;
@@ -541,7 +606,18 @@ static bool transfer_chunk_submit(void)
 
 static void command_transfer(void)
 {
-    if (!s_connected || !transfer_parse() || !transfer_chunk_submit()) {
+    if (!s_connected || !transfer_parse()) {
+        s_response[0] = DAP_TRANSFER;
+        s_response[1] = 0U;
+        s_response[2] = DAP_TRANSFER_ERROR;
+        response_finish(3U);
+        return;
+    }
+    if (s_transfer_count == 0U) {
+        response_finish(s_response_length);
+        return;
+    }
+    if (!transfer_chunk_submit()) {
         s_response[0] = DAP_TRANSFER;
         s_response[1] = 0U;
         s_response[2] = DAP_TRANSFER_ERROR;
@@ -553,8 +629,19 @@ static void command_transfer(void)
 
 static void command_transfer_block(void)
 {
-    if (!s_connected || !transfer_block_parse() ||
-        !transfer_chunk_submit()) {
+    if (!s_connected || !transfer_block_parse()) {
+        s_response[0] = DAP_TRANSFER_BLOCK;
+        s_response[1] = 0U;
+        s_response[2] = 0U;
+        s_response[3] = DAP_TRANSFER_ERROR;
+        response_finish(4U);
+        return;
+    }
+    if (s_transfer_count == 0U) {
+        response_finish(s_response_length);
+        return;
+    }
+    if (!transfer_chunk_submit()) {
         s_response[0] = DAP_TRANSFER_BLOCK;
         s_response[1] = 0U;
         s_response[2] = 0U;
@@ -759,12 +846,15 @@ static void command_dispatch(void)
         s_response[0] = command;
         if (s_request_length < 3U) {
             s_response[1] = DAP_ERROR;
+            response_finish(2U);
         } else {
-            board_delay_us((uint16_t)s_request[1] |
-                           ((uint16_t)s_request[2] << 8));
+            uint16_t delay_ms = (uint16_t)s_request[1] |
+                                ((uint16_t)s_request[2] << 8);
             s_response[1] = DAP_OK;
+            s_response_length = 2U;
+            s_deadline = board_millis() + (uint32_t)delay_ms;
+            s_state = DAP_STATE_DELAY;
         }
-        response_finish(2U);
         break;
     case DAP_RESET_TARGET:
         command_reset();
@@ -786,6 +876,9 @@ static void command_dispatch(void)
         break;
     case DAP_VENDOR_STATUS:
         command_vendor_status();
+        break;
+    case DAP_VENDOR_TRACE:
+        command_vendor_trace();
         break;
     default:
         response_invalid();
@@ -921,6 +1014,12 @@ void cmsis_dap_process(void)
      * 处理全部在主循环完成。 */
     if ((s_state == DAP_STATE_IDLE) || s_response_ready) {
         s_abort_requested = false;
+        return;
+    }
+    if (s_state == DAP_STATE_DELAY) {
+        if ((int32_t)(board_millis() - s_deadline) >= 0) {
+            response_finish(2U);
+        }
         return;
     }
     if (s_abort_requested) {

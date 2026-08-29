@@ -1,5 +1,29 @@
 ﻿# Changelog
 
+## 1.0.33 - 2026-08-29
+
+- 增加可选的 `CMSIS_DAP_DIAGNOSTICS` 构建开关，记录 USB、无线 ACK、Remote 往返、USB IN、帧字节、重传和 Transfer 大小分布。
+- `DAP_VENDOR_TRACE (0x81)` 在诊断构建中支持统计清零和三页固定数据读取；普通构建完整裁剪热路径埋点和统计存储。
+- 增加 `tools/dap_diagnostics.py reset|dump`，用于导出 JSON 指标；本版本不修改无线协议、profile、窗口或 SWD 时钟。
+
+## 1.0.32 - 2026-08-29
+
+- 临时关闭 `DAP_Info(0xF0)` 的 Atomic Commands 能力广告，迫使 Keil 使用普通 CMSIS-DAP 传输路径；批量命令实现保留。
+- 保留 Debug 构建的 CMSIS-DAP 请求/响应追踪接口（`0x81`）；Release 构建通过编译宏裁剪追踪存储。
+- 实机验收：无线主机/从机使用本版本通过 F10x 工程的 Keil `Erase`、`Programming` 和 `Verify`。
+
+## 1.0.28 - 2026-08-29
+
+## 1.0.29 - 2026-08-29
+
+- 对齐官方 CMSIS-DAP：`DAP_Transfer` 和 `DAP_TransferBlock` 的 transfer count 为 0 时返回空成功响应，支持 Keil 编程收尾阶段的空传输。
+
+- 回退强制 64 字节 USB IN 响应；恢复官方 CMSIS-DAP 短响应包长度，修复 Keil 设备探测受影响的问题。
+
+## 1.0.27 - 2026-08-29
+
+- USB IN 响应统一按 64 字节 CMSIS-DAP v2 包发送，短响应尾部补零，避免 Keil 编程进度完成后因最后一个短包判定失败。
+
 ## 1.0.26 - 2026-08-29
 
 - 放宽官方 `ExecuteCommands` 聚合子命令数量上限至请求包可容纳的 32 条，避免 Keil 批量编程请求被错误判为无效。

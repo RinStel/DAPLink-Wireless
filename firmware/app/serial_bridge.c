@@ -31,6 +31,7 @@
 #include "sx128x.h"
 #include "swd_bridge_service.h"
 #include "swd_tunnel.h"
+#include "dap_diagnostics.h"
 #include "target_swd.h"
 
 /* 本模块负责无线可靠传输、会话校验、频道/Profile 自适应和 SWD 所有权。
@@ -244,6 +245,7 @@ static bool frame_transmit(const uint8_t *frame, uint8_t length,
     if (sx128x_start_tx(frame, length) != SX128X_RESULT_OK) {
         return false;
     }
+    DAP_DIAG(rf_tx_start(length, (kind == TX_RELIABLE) && (s_retries != 0U)));
     s_tx_kind = kind;
     activity_signal();
     return true;
@@ -541,6 +543,10 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                 (pending_type == BRIDGE_FRAME_SWD_COMMAND) ||
                 (pending_type == RADIO_FRAME_SWD_BLOCK);
 
+            if (swd_pending_response) {
+                DAP_DIAG(request_ack());
+            }
+
             /* SWD ACK 只确认请求到达；必须继续等待匹配的隧道响应。 */
             if (!swd_pending_response) {
                 s_pending = false;
@@ -669,6 +675,7 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                                                        length)) {
                 return;
             }
+            DAP_DIAG(swd_response());
             if (s_pending &&
                 (s_pending_frame[3] == BRIDGE_FRAME_SWD_COMMAND)) {
                 s_pending = false;
@@ -681,6 +688,7 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                                                             length)) {
                 return;
             }
+            DAP_DIAG(swd_response());
             if (s_pending &&
                 (s_pending_frame[3] == RADIO_FRAME_SWD_BLOCK)) {
                 s_pending = false;
@@ -850,6 +858,7 @@ static void radio_irq_process(void)
             return;
         }
         s_tx_kind = TX_NONE;
+        DAP_DIAG(rf_tx_done());
         if ((completed == TX_ACK) && s_channel_switch_after_ack) {
             s_channel_before_trial = s_current_channel;
             if (!radio_channel_set(s_channel_after_ack, true)) {
@@ -879,6 +888,7 @@ static void radio_irq_process(void)
                 radio_fail();
                 return;
             }
+            DAP_DIAG(rx_restored());
         }
         if ((completed == TX_RELIABLE) && s_pending) {
             s_waiting_ack = true;
@@ -1376,6 +1386,7 @@ bool serial_bridge_swd_transfers(
     uint8_t transaction_id, const swd_tunnel_transfer_t *transfers,
     uint8_t count)
 {
+    DAP_DIAG(swd_queued(count));
     uint8_t payload[BRIDGE_PAYLOAD_SIZE];
     device_mode_t mode = device_config_get()->device_mode;
 

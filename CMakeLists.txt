@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 project(DAPLinkWireless LANGUAGES C ASM)
 
+option(CMSIS_DAP_DIAGNOSTICS "Enable CMSIS-DAP timing diagnostics" OFF)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -46,7 +48,7 @@ set(FIRMWARE_STARTUP
     vendor/GD32_CMSIS/GD/GD32F30x/Source/system_gd32f30x.c
     vendor/GD32_CMSIS/GD/GD32F30x/Source/GCC/startup_gd32f30x_hd.S)
 set(FIRMWARE_APPLICATION
-    firmware/app/main.c firmware/app/cmsis_dap.c firmware/app/frequency_hopping.c
+    firmware/app/main.c firmware/app/cmsis_dap.c firmware/app/dap_diagnostics.c firmware/app/frequency_hopping.c
     firmware/app/link_adaptation.c firmware/app/radio_protocol.c firmware/app/radio_window.c
     firmware/app/serial_service.c firmware/app/serial_bridge.c firmware/app/status_indicator.c
     firmware/app/swd_bridge_service.c firmware/app/swd_tunnel.c firmware/app/device_config.c
@@ -105,6 +107,9 @@ add_firmware_target(daplink_slot_a firmware/linker/gd32f303xC_slot_a.ld
     ${FIRMWARE_APPLICATION} ${FIRMWARE_VENDOR_PERIPHERAL} ${FIRMWARE_VENDOR_USB}
     ${FIRMWARE_MSC} ${FIRMWARE_STARTUP})
 target_compile_definitions(daplink_slot_a PRIVATE FIRMWARE_LINK_SLOT=0)
+if(CMSIS_DAP_DIAGNOSTICS)
+    target_compile_definitions(daplink_slot_a PRIVATE CMSIS_DAP_DIAGNOSTICS_ENABLE=1)
+endif()
 add_custom_command(TARGET daplink_slot_a POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:daplink_slot_a> ${CMAKE_BINARY_DIR}/daplink_wireless.elf
@@ -118,6 +123,9 @@ add_firmware_target(daplink_slot_b firmware/linker/gd32f303xC_slot_b.ld
     ${FIRMWARE_APPLICATION} ${FIRMWARE_VENDOR_PERIPHERAL} ${FIRMWARE_VENDOR_USB}
     ${FIRMWARE_MSC} ${FIRMWARE_STARTUP})
 target_compile_definitions(daplink_slot_b PRIVATE FIRMWARE_LINK_SLOT=1)
+if(CMSIS_DAP_DIAGNOSTICS)
+    target_compile_definitions(daplink_slot_b PRIVATE CMSIS_DAP_DIAGNOSTICS_ENABLE=1)
+endif()
 set_source_files_properties(firmware/drivers/swd/target_swd.c PROPERTIES COMPILE_OPTIONS "-O3")
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)

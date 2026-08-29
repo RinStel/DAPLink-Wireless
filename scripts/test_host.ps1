@@ -142,6 +142,7 @@ $tests = [ordered]@{
     }
     "cmsis-dap" = @{
         label = "CMSIS-DAP protocol"
+        defines = @("CMSIS_DAP_DIAGNOSTICS_ENABLE=1")
         includes = @(
             "firmware/app",
             "firmware/bsp",
@@ -150,7 +151,8 @@ $tests = [ordered]@{
         )
         sources = @(
             "tests/cmsis_dap_protocol_test.c",
-            "firmware/app/cmsis_dap.c"
+            "firmware/app/cmsis_dap.c",
+            "firmware/app/dap_diagnostics.c"
         )
     }
     "target-swd-config" = @{

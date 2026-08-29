@@ -12,9 +12,12 @@
 #define DAP_DISCONNECT         0x03U
 #define DAP_TRANSFER_CONFIGURE 0x04U
 #define DAP_TRANSFER           0x05U
+#define DAP_TRANSFER_BLOCK     0x06U
 #define DAP_RESET_TARGET       0x0AU
+#define DAP_DELAY              0x09U
 #define DAP_SWD_SEQUENCE       0x1DU
 #define DAP_EXECUTE_COMMANDS   0x7FU
+#define DAP_VENDOR_TRACE       0x81U
 #define CMSIS_DAP_PROTOCOL_VERSION "2.1.2"
 
 static uint32_t s_now_ms;
@@ -33,6 +36,16 @@ static uint8_t s_sequence_length;
 uint32_t board_millis(void)
 {
     return s_now_ms;
+}
+
+uint32_t board_cycle_count(void)
+{
+    return s_now_ms * 120000U;
+}
+
+uint32_t board_cycles_from_us(uint32_t delay_us)
+{
+    return delay_us * 120U;
 }
 
 void board_delay_us(uint32_t delay_us)
@@ -247,6 +260,37 @@ int main(void)
     assert(response[2] == 0x01U);
     assert(response[3] == 0x01U);
 
+    /* DAP_Delay 参数单位为毫秒，且处理必须异步完成。 */
+    request[0] = DAP_DELAY;
+    request[1] = 10U;
+    request[2] = 0U;
+    s_now_ms = 100U;
+    assert(cmsis_dap_submit(request, 3U));
+    cmsis_dap_process();
+    assert(!s_response_available);
+    s_now_ms = 109U;
+    cmsis_dap_process();
+    assert(!s_response_available);
+    s_now_ms = 110U;
+    cmsis_dap_process();
+    assert(response_take(response) == 2U);
+    assert(response[0] == DAP_DELAY && response[1] == 0U);
+
+    request[0] = DAP_VENDOR_TRACE;
+    request[1] = 0U;
+    assert(cmsis_dap_submit(request, 2U));
+    assert(response_take(response) == 3U);
+    assert(response[0] == DAP_VENDOR_TRACE && response[1] == 1U &&
+           response[2] == 0U);
+
+    request[1] = 1U;
+    request[2] = 0U;
+    assert(cmsis_dap_submit(request, 3U));
+    length = response_take(response);
+    assert(length == 64U);
+    assert(response[0] == DAP_VENDOR_TRACE && response[1] == 1U &&
+           response[2] == 0U);
+
     request[0] = DAP_INFO;
     request[1] = 0x09U;
     assert(cmsis_dap_submit(request, 2U));
@@ -321,6 +365,37 @@ int main(void)
     assert(response[2] == TARGET_SWD_ACK_OK);
     assert(response[3] == 0x12U);
     assert(response[6] == 0x78U);
+
+    /* A zero-count transfer is a valid no-op and must complete immediately. */
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_TRANSFER;
+    request[2] = 0U;
+    assert(cmsis_dap_submit(request, 3U));
+    assert(response_take(response) == 3U);
+    assert(!cmsis_dap_busy());
+    assert(response[1] == 0U && response[2] == 0U);
+
+    /* DAP_TransferBlock has the same valid zero-count no-op semantics. */
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_TRANSFER_BLOCK;
+    request[2] = 0U;
+    request[3] = 0U;
+    request[4] = 0x02U;
+    assert(cmsis_dap_submit(request, 5U));
+    assert(response_take(response) == 4U);
+    assert(!cmsis_dap_busy());
+    assert(response[1] == 0U && response[2] == 0U && response[3] == 0U);
+
+    /* Zero-count transfers must also be accepted inside ExecuteCommands. */
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_EXECUTE_COMMANDS;
+    request[1] = 1U;
+    request[2] = DAP_TRANSFER;
+    request[4] = 0U;
+    assert(cmsis_dap_submit(request, 5U));
+    assert(response_take(response) == 5U);
+    assert(response[0] == DAP_EXECUTE_COMMANDS && response[1] == 1U);
+    assert(response[2] == DAP_TRANSFER && response[3] == 0U && response[4] == 0U);
 
     memset(request, 0, sizeof(request));
     request[0] = DAP_TRANSFER;

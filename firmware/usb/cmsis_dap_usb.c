@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "cmsis_dap_usb.h"
+#include "dap_diagnostics.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -189,6 +190,7 @@ static void dap_usb_data_in(usb_dev *udev, uint8_t ep_num)
     if (ep_num != EP_ID(DAP_V2_IN_EP)) {
         return;
     }
+    DAP_DIAG(usb_in_complete());
     if (response_available()) {
         s_transport.response_read = ring_next(s_transport.response_read);
     }
@@ -210,6 +212,8 @@ static void dap_usb_data_out(usb_dev *udev, uint8_t ep_num)
         receive_arm_if_space();
         return;
     }
+    DAP_DIAG(usb_out(s_transport.requests[s_transport.request_write].data,
+                     length));
     if (s_transport.requests[s_transport.request_write].data[0] ==
         DAP_TRANSFER_ABORT) {
         cmsis_dap_abort();
