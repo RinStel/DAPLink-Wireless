@@ -141,6 +141,20 @@ static uint32_t read_bits(uint8_t count)
     return value;
 }
 
+/* Arm CMSIS-DAP leaves SWDIO actively driven high after every completed
+ * transfer.  Configured idle cycles are only part of the ACK=OK path; WAIT,
+ * FAULT, and protocol-error recovery park immediately after their required
+ * turnaround/data-phase clocks. */
+static inline void swdio_idle_park(void)
+{
+    swdio_output();
+    if (s_idle_cycles != 0U) {
+        swdio_write(false);
+        write_bits(0U, s_idle_cycles);
+    }
+    swdio_write(true);
+}
+
 static uint32_t parity32(uint32_t value)
 {
     value ^= value >> 16;
@@ -198,7 +212,12 @@ static target_swd_ack_t transfer_once(uint8_t request, uint32_t *data)
             write_bits(value, 32U);
             write_bit(parity32(value));
         }
-    } else {
+        swdio_idle_park();
+        return ack;
+    }
+
+    if ((ack == TARGET_SWD_ACK_WAIT) ||
+        (ack == TARGET_SWD_ACK_FAULT)) {
         if (s_data_phase) {
             if (read) {
                 (void)read_bits(32U);
@@ -221,15 +240,18 @@ static target_swd_ack_t transfer_once(uint8_t request, uint32_t *data)
             }
             swdio_output();
         }
-        if ((ack != TARGET_SWD_ACK_WAIT) &&
-            (ack != TARGET_SWD_ACK_FAULT)) {
-            ack = TARGET_SWD_ACK_PROTOCOL;
-        }
+        swdio_write(true);
+        return ack;
     }
 
-    swdio_write(false);
-    write_bits(0U, s_idle_cycles);
-    swdio_input();
+    /* Protocol errors must consume the complete dummy data phase before the
+     * line is parked, matching Arm SW_DP.c's turnaround + 32-bit data + parity
+     * back-off. */
+    for (index = 0U; index < (uint8_t)(s_turnaround + 33U); ++index) {
+        clock_cycle();
+    }
+    swdio_output();
+    swdio_write(true);
     return ack;
 }
 

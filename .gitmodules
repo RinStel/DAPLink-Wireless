@@ -1,3 +1,6 @@
 [submodule "Third-Party/CMSIS-DAP"]
 	path = Third-Party/CMSIS-DAP
 	url = https://github.com/ARM-software/CMSIS-DAP.git
+[submodule "vendor/Arm-CMSIS-DAP"]
+	path = vendor/Arm-CMSIS-DAP
+	url = https://github.com/ARM-software/CMSIS-DAP.git

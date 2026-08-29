@@ -1,7 +1,7 @@
 # DAPLink-Wireless
 
 基于两块相同硬件构成的无线 CMSIS-DAP v2 调试器。主控为 `GD32F303CCT6`，无线模块为
-基于 SX1281 的 `E28-2G4M20SX`。无线链路协议为 `v2`。
+基于 SX1281 的 `E28-2G4M20SX`。无线链路协议为 `v3`；旧无线固件不兼容。
 
 ## 功能
 
@@ -45,6 +45,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
   是救砖入口。
 - `.dwup` 必须交给 `tools/daplink_updater.py`，不得直接交给 `dfu-util --download`。
 
+`daplink_updater.py` 会自动通过 MSC 的 `CONFIG.TXT` 写入 `ENTER_DFU=1` 并完成 DFU
+重枚举；同时连接主从两块设备时，请使用 `--volume D:\\`、`--volume E:\\` 分别指定目标。
+
 首次烧录、pyOCD 参数、CLion 烧录目标、USB DFU 命令和实板验收要求见
 [开发与发布手册](docs/development_release_manual.md)。
 
@@ -52,7 +55,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 
 - [项目手册](docs/project_manual.md)：产品架构、固件模块和 USB 配置。
 - [硬件手册](docs/hardware_manual.md)：原理图基线、GPIO、上电和硬件验收。
-- [无线手册](docs/wireless_manual.md)：协议 v2、窗口 ACK、跳频和射频验证。
+- [无线手册](docs/wireless_manual.md)：协议 v3、窗口 ACK、跳频和射频验证。
 - [开发与发布手册](docs/development_release_manual.md)：构建、烧录、升级和发布门禁。
 - [U5 原理图连接记录](docs/schematic_u5_connections.md)：原理图网络事实和代码对照。
 - [变更记录](CHANGELOG.md)

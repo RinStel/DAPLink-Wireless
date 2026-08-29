@@ -13,6 +13,7 @@ static uint32_t s_receive_calls;
 static uint8_t s_sent_response[CMSIS_DAP_PACKET_SIZE];
 static uint8_t s_sent_length;
 static uint8_t s_submit_count;
+static uint8_t s_last_submit_command;
 static uint8_t s_abort_count;
 static uint8_t s_response_value;
 static bool s_core_busy;
@@ -77,6 +78,7 @@ bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
     assert(request != NULL);
     assert(length != 0U);
     ++s_submit_count;
+    s_last_submit_command = request[0];
     s_core_busy = true;
     return true;
 }
@@ -129,6 +131,8 @@ int main(void)
     usb_dev device;
     uint8_t request[] = {0x00U};
     uint8_t abort_request[] = {0x07U};
+    uint8_t queue_request[] = {0x7EU, 1U, 0x00U, 0x01U};
+    uint8_t submit_before_queue;
 
     memset(&device, 0, sizeof(device));
     device.drv_handler = &s_usb_handler;
@@ -156,7 +160,6 @@ int main(void)
 
     receive_packet(&device, abort_request, sizeof(abort_request));
     assert(s_abort_count == 1U);
-
     s_response_value = 0x81U;
     s_response_ready = true;
     cmsis_dap_usb_process();
@@ -176,6 +179,18 @@ int main(void)
 
     assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
 
+    /* 独立验证 QueueCommands 延迟提交和 ExecuteCommands 转换。 */
+    assert(cmsis_dap_usb_class.init(&device, 0U) == USBD_OK);
+    submit_before_queue = s_submit_count;
+    receive_packet(&device, queue_request, sizeof(queue_request));
+    cmsis_dap_usb_process();
+    assert(s_submit_count == submit_before_queue);
+    receive_packet(&device, request, sizeof(request));
+    cmsis_dap_usb_process();
+    assert(s_submit_count == (uint8_t)(submit_before_queue + 1U));
+    assert(s_last_submit_command == 0x7FU);
+    assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
+
     assert(cmsis_dap_usb_class.init(&device, 0U) == USBD_OK);
     receive_packet(&device, request, sizeof(request));
     receive_packet(&device, request, sizeof(request));
@@ -190,7 +205,7 @@ int main(void)
     receive_packet(&device, request, sizeof(request));
     assert(!s_receive_armed);
     cmsis_dap_usb_process();
-    assert(s_submit_count == 4U);
+    assert(s_submit_count == 5U);
     assert(s_receive_armed);
     assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
     return 0;

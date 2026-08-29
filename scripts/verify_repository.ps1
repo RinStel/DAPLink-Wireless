@@ -125,8 +125,16 @@ $snapshotRoots = @(
         $_.path.Replace('\', '/').TrimEnd('/') + '/'
     }
 )
+$lockedSubmodulePaths = @(
+    $lock.submodules | ForEach-Object {
+        $_.path.Replace('\', '/').TrimEnd('/')
+    }
+)
 $trackedVendor = @(
-    $indexEntries.Keys | Where-Object { $_.StartsWith("vendor/") }
+    $indexEntries.Keys | Where-Object {
+        $_.StartsWith("vendor/") -and
+        $lockedSubmodulePaths -notcontains $_
+    }
 )
 $unexpectedVendor = $trackedVendor | Where-Object {
     $path = $_

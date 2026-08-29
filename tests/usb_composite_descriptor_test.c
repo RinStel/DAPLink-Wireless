@@ -75,6 +75,8 @@ static uint16_t decode_u16_le(const uint8_t *data)
 
 int main(void)
 {
+    static const char cmsis_dap_v2_guid[] =
+        "{CDB3B5AD-293B-4663-AA36-1AAE46463776}";
     const uint8_t *device = composite_desc.dev_desc;
     const uint8_t *config = composite_desc.config_desc;
     const uint8_t *manufacturer = composite_desc.strings[STR_IDX_MFC];
@@ -82,6 +84,7 @@ int main(void)
     uint16_t total_length = decode_u16_le(&config[2]);
     uint16_t offset = 0U;
     uint8_t interface_count = 0U;
+    uint8_t guid_index;
     uint8_t current_interface = 0xFFU;
     uint8_t dap_endpoint_count = 0U;
     bool dap_out_found = false;
@@ -299,9 +302,13 @@ int main(void)
     assert(udev.transc_in[0].xfer_buf[20] == 'D');
     assert(udev.transc_in[0].xfer_buf[22] == 'e');
     assert(udev.transc_in[0].xfer_buf[62] == 80U);
-    assert(udev.transc_in[0].xfer_buf[66] == '{');
-    assert(udev.transc_in[0].xfer_buf[68] == '7');
-    assert(udev.transc_in[0].xfer_buf[140] == '}');
+    for (guid_index = 0U;
+         guid_index < sizeof(cmsis_dap_v2_guid) - 1U;
+         ++guid_index) {
+        assert(udev.transc_in[0].xfer_buf[66U + guid_index * 2U] ==
+               (uint8_t)cmsis_dap_v2_guid[guid_index]);
+        assert(udev.transc_in[0].xfer_buf[67U + guid_index * 2U] == 0U);
+    }
     assert(udev.transc_in[0].xfer_buf[142] == 0U);
     assert(udev.transc_in[0].xfer_buf[144] == 0U);
 

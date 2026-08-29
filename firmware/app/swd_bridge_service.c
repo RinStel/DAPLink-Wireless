@@ -26,6 +26,9 @@ typedef enum {
     SWD_OWNER_WIRELESS_SLAVE
 } swd_owner_t;
 
+#define SWD_BRIDGE_LOCAL_BATCH_BUDGET_US    400U
+#define SWD_BRIDGE_WIRELESS_BATCH_BUDGET_US 1600U
+
 /* 本服务把有线 CMSIS-DAP 和无线 SWD 流量串行化到唯一的目标 SWD 引擎。 */
 
 static swd_owner_t s_owner;
@@ -69,7 +72,10 @@ void swd_bridge_service_process(void)
     uint8_t length;
 
     /* 解码一个已完成的隧道响应，并路由给当前所有者。 */
-    swd_tunnel_process();
+    swd_tunnel_process_budget(
+        s_owner == SWD_OWNER_WIRELESS_SLAVE
+            ? SWD_BRIDGE_WIRELESS_BATCH_BUDGET_US
+            : SWD_BRIDGE_LOCAL_BATCH_BUDGET_US);
     if (!swd_tunnel_response_take(payload, &length)) {
         return;
     }
@@ -333,6 +339,12 @@ bool swd_bridge_service_cancel(uint8_t transaction_id)
 bool swd_bridge_service_request_active(void)
 {
     return s_request_active;
+}
+
+bool swd_bridge_service_busy(void)
+{
+    return s_request_active || s_response_ready || s_reply_ready ||
+           (s_owner != SWD_OWNER_NONE);
 }
 
 uint32_t swd_bridge_service_cancellations(void)

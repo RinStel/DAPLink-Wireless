@@ -10,13 +10,15 @@ static bool s_sequence_transfer_called;
 static bool s_cancel_during_transfer;
 static bool s_abort_requested;
 static uint32_t s_now_ms;
+static uint32_t s_cycle_count;
+static uint32_t s_cycle_advance;
 static uint32_t s_transfer_advance_ms;
 static uint32_t s_transfer_calls;
 static bool s_async_transfer;
 static uint32_t *s_async_data;
 static uint16_t s_async_waits_remaining;
-static uint8_t s_async_requests[8];
-static uint32_t s_async_results[8];
+static uint8_t s_async_requests[140];
+static uint32_t s_async_results[140];
 static uint8_t s_async_request_count;
 static uint8_t s_async_result_count;
 
@@ -27,7 +29,10 @@ uint32_t board_millis(void)
 
 uint32_t board_cycle_count(void)
 {
-    return 0U;
+    uint32_t result = s_cycle_count;
+
+    s_cycle_count += s_cycle_advance;
+    return result;
 }
 
 uint32_t board_cycles_from_us(uint32_t delay_us)
@@ -181,12 +186,18 @@ int main(void)
         swd_tunnel_transfer_t block_transfers[3] = {
             {.request = 0x02U, .data = 0U},
             {.request = 0x00U, .data = 0x11223344U},
-            {.request = 0x12U, .data = 0U}
+            {.request = 0x12U, .data = 0xA1B2C3D4U}
         };
 
         length = swd_tunnel_encode_block(
             8U, block_transfers, 3U, payload);
-        assert(length == 2U + 3U + 4U);
+        /* Arm DAP_Transfer 的 Match Value 读请求也携带 4 字节
+         * 期望值；无线 block 必须与写请求一样保留该载荷。 */
+        assert(length == 13U);
+        assert(payload[9] == 0xD4U);
+        assert(payload[10] == 0xC3U);
+        assert(payload[11] == 0xB2U);
+        assert(payload[12] == 0xA1U);
         assert(swd_tunnel_decode_block(payload, length, &block));
         assert(block.transaction_id == 8U);
         assert(block.count == 3U);
@@ -194,6 +205,7 @@ int main(void)
         assert(block.transfers[1].request == 0x00U);
         assert(block.transfers[1].data == 0x11223344U);
         assert(block.transfers[2].request == 0x12U);
+        assert(block.transfers[2].data == 0xA1B2C3D4U);
         assert(swd_tunnel_encode_block(
                    8U, block_transfers,
                    (uint8_t)(SWD_TUNNEL_MAX_BLOCK_TRANSFERS + 1U),
@@ -230,6 +242,9 @@ int main(void)
     assert(payload[5] == 0x78U);
     assert(payload[6] == 0x56U);
 
+    /* 运行时配置两个 Match Value 重试；总尝试次数为首次读取加两次重试。 */
+    assert(swd_tunnel_encode_configure(
+               4U, 2U, 0x1234U, 2U, 1U, false, payload) == 9U);
     assert(swd_tunnel_submit(payload, 9U));
     swd_tunnel_process();
     assert(swd_tunnel_response_take(payload, &length));
@@ -242,12 +257,100 @@ int main(void)
         };
 
         s_transfer_calls = 0U;
+        s_async_request_count = 0U;
+        s_async_result_count = 0U;
         assert(swd_tunnel_submit_block(5U, match_transfers, 2U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
-        assert(s_transfer_calls == 1U);
+        assert(s_transfer_calls == 3U);
+        /* Arm DAP_SWD_Transfer 在 Value Mismatch 分支跳出后不会执行
+         * response_count++；失败的 Match Value 项不计入 completed。 */
+        assert(payload[2] == 1U);
         assert(payload[3] == 0x11U);
+    }
+
+    {
+        swd_tunnel_transfer_t match_transfers[2] = {
+            {.request = 0x20U, .data = 0xFFFFFFFFU},
+            {.request = 0x12U, .data = 1U}
+        };
+
+        /* DP Match Value 首次不匹配，第二次匹配时必须成功。 */
+        s_transfer_calls = 0U;
+        s_async_request_count = 0U;
+        s_async_result_count = 2U;
+        s_async_results[0] = 0U;
+        s_async_results[1] = 1U;
+        assert(swd_tunnel_submit_block(6U, match_transfers, 2U));
+        while (!swd_tunnel_response_take(payload, &length)) {
+            swd_tunnel_process();
+        }
+        assert(s_transfer_calls == 2U);
+        assert(payload[2] == 2U);
+        assert(payload[3] == TARGET_SWD_ACK_OK);
+    }
+
+    {
+        swd_tunnel_transfer_t match_transfers[2] = {
+            {.request = 0x20U, .data = 0xFFFFFFFFU},
+            {.request = 0x12U, .data = 1U}
+        };
+
+        /* 16 位 match_retry 不得钳制为 128；129 次重试应允许第 130 次
+         * 读取完成匹配。 */
+        assert(swd_tunnel_encode_configure(
+                   7U, 2U, 0x1234U, 129U, 1U, false,
+                   payload) == 9U);
+        assert(swd_tunnel_submit(payload, 9U));
+        swd_tunnel_process();
+        assert(swd_tunnel_response_take(payload, &length));
+        s_transfer_calls = 0U;
+        s_async_request_count = 0U;
+        memset(s_async_results, 0, sizeof(s_async_results));
+        s_async_result_count = 130U;
+        s_async_results[129] = 1U;
+        assert(swd_tunnel_submit_block(7U, match_transfers, 2U));
+        while (!swd_tunnel_response_take(payload, &length)) {
+            swd_tunnel_process();
+        }
+        assert(s_transfer_calls == 130U);
+        assert(payload[2] == 2U);
+        assert(payload[3] == TARGET_SWD_ACK_OK);
+    }
+
+    {
+        swd_tunnel_transfer_t ap_match_transfers[2] = {
+            {.request = 0x20U, .data = 0xFFFFFFFFU},
+            {.request = 0x13U, .data = 0xA5U}
+        };
+
+        /* AP Match Value 先发一次 posted read；后续两次 AP read 分别返回
+         * 不匹配值和匹配值。 */
+        assert(swd_tunnel_encode_configure(
+                   8U, 2U, 0x1234U, 2U, 1U, false,
+                   payload) == 9U);
+        assert(swd_tunnel_submit(payload, 9U));
+        swd_tunnel_process();
+        assert(swd_tunnel_response_take(payload, &length));
+        s_transfer_calls = 0U;
+        s_async_request_count = 0U;
+        s_async_result_count = 3U;
+        s_async_results[0] = 0xDEADBEEFU;
+        s_async_results[1] = 0U;
+        s_async_results[2] = 0xA5U;
+        assert(swd_tunnel_submit_block(
+            8U, ap_match_transfers, 2U));
+        while (!swd_tunnel_response_take(payload, &length)) {
+            swd_tunnel_process();
+        }
+        assert(s_transfer_calls == 3U);
+        assert(s_async_request_count == 3U);
+        assert(s_async_requests[0] == 0x13U);
+        assert(s_async_requests[1] == 0x13U);
+        assert(s_async_requests[2] == 0x13U);
+        assert(payload[2] == 2U);
+        assert(payload[3] == TARGET_SWD_ACK_OK);
     }
 
     {
@@ -426,20 +529,47 @@ int main(void)
     assert(!swd_tunnel_submit_block(13U, &cancel_transfer, 1U));
 
     {
+        swd_tunnel_transfer_t fast_batch[4] = {
+            {.request = 0x00U, .data = 1U},
+            {.request = 0x00U, .data = 2U},
+            {.request = 0x00U, .data = 3U},
+            {.request = 0x00U, .data = 4U}
+        };
+
+        s_transfer_calls = 0U;
+        s_cycle_count = 0U;
+        s_cycle_advance = 500U;
+        assert(swd_tunnel_submit_block(20U, fast_batch, 4U));
+        swd_tunnel_process_budget(1600U);
+        assert(s_transfer_calls == 4U);
+        while (!swd_tunnel_response_take(payload, &length)) {
+            swd_tunnel_process_budget(1600U);
+        }
+        s_cycle_advance = 0U;
+    }
+
+    {
         swd_tunnel_transfer_t budget_transfers[2] = {
             {.request = 0x20U, .data = 0xFFFFFFFFU},
             {.request = 0x12U, .data = 1U}
         };
 
+        assert(swd_tunnel_encode_configure(
+                   14U, 2U, 0x1234U, 100U, 1U, false,
+                   payload) == 9U);
+        assert(swd_tunnel_submit(payload, 9U));
+        swd_tunnel_process();
+        assert(swd_tunnel_response_take(payload, &length));
         s_now_ms = 0U;
         s_transfer_advance_ms = 300U;
         s_transfer_calls = 0U;
+        s_async_result_count = 0U;
         assert(swd_tunnel_submit_block(14U, budget_transfers, 2U));
         while (!swd_tunnel_response_take(payload, &length)) {
             swd_tunnel_process();
         }
         assert(s_transfer_calls < 20U);
-        assert(payload[3] == 0x11U);
+        assert(payload[3] == TARGET_SWD_ACK_WAIT);
         s_transfer_advance_ms = 0U;
     }
     return 0;

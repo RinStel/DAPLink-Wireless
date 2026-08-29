@@ -28,6 +28,11 @@ function Repo-Path([string]$relativePath) {
 }
 
 $tests = [ordered]@{
+    "target-swd-protocol" = @{
+        label = "Target SWD Arm protocol"
+        script = $true
+        script_path = "tests/target_swd_protocol_test.ps1"
+    }
     "usb-config-dfu-entry" = @{
         label = "MSC DFU entry"
         includes = @("firmware/update")
@@ -198,6 +203,19 @@ $tests = [ordered]@{
             "firmware/app/radio_window.c"
         )
     }
+    "serial-bridge-hot-path" = @{
+        label = "Serial bridge radio hot path"
+        compile_flags = @("-ffunction-sections", "-fdata-sections")
+        link_flags = @("-Wl,--gc-sections")
+        includes = @(
+            "firmware/app",
+            "firmware/bsp",
+            "firmware/drivers/radio",
+            "firmware/drivers/serial",
+            "firmware/drivers/swd"
+        )
+        sources = @("tests/serial_bridge_hot_path_test.c")
+    }
     "device-config" = @{
         label = "Device configuration"
         analyzer = $true
@@ -231,6 +249,20 @@ $tests = [ordered]@{
         sources = @(
             "tests/swd_tunnel_protocol_test.c",
             "firmware/app/swd_tunnel.c"
+        )
+    }
+    "swd-bridge-service" = @{
+        label = "SWD bridge service"
+        compile_flags = @("-ffunction-sections", "-fdata-sections")
+        link_flags = @("-Wl,--gc-sections")
+        includes = @(
+            "firmware/app",
+            "firmware/drivers/radio",
+            "firmware/drivers/swd"
+        )
+        sources = @(
+            "tests/swd_bridge_service_test.c",
+            "firmware/app/swd_bridge_service.c"
         )
     }
     "target-uart-ring" = @{
@@ -349,6 +381,13 @@ if (($Name -eq "all") -or ($Name -eq "startup-sequence")) {
 
 foreach ($testName in $selectedTests) {
     $test = $tests[$testName]
+    if ($test.ContainsKey("script") -and $test.script) {
+        & (Repo-Path $test.script_path)
+        if (-not $?) {
+            throw "$($test.label) test failed"
+        }
+        continue
+    }
     $executableName = $testName
     if ($isWindowsHost) {
         $executableName += ".exe"

@@ -102,8 +102,67 @@ static uint16_t s_match_retry;
 static uint8_t s_turnaround;
 static bool s_data_phase;
 static volatile bool s_abort_requested;
+static uint8_t s_parent_request[CMSIS_DAP_PACKET_SIZE];
+static uint8_t s_parent_response[CMSIS_DAP_PACKET_SIZE];
+static uint8_t s_parent_count;
+static uint8_t s_parent_index;
+static uint8_t s_parent_request_offset;
+static uint8_t s_parent_request_length;
+static uint8_t s_parent_response_offset;
+static bool s_parent_active;
 
 static void response_finish(uint8_t length);
+static bool parent_start_next(void);
+static void command_dispatch(void);
+
+static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
+{
+    uint16_t n, i;
+    if (avail == 0U) return false;
+    switch (p[0]) {
+    case DAP_INFO: case DAP_CONNECT: case DAP_DISCONNECT: case DAP_HOST_STATUS:
+    case DAP_TRANSFER_CONFIGURE: case DAP_TRANSFER_ABORT: case DAP_WRITE_ABORT:
+    case DAP_DELAY: case DAP_RESET_TARGET: case DAP_SWJ_CLOCK:
+    case DAP_SWD_CONFIGURE: case DAP_VENDOR_STATUS:
+        n = (p[0] == DAP_INFO || p[0] == DAP_CONNECT || p[0] == DAP_HOST_STATUS || p[0] == DAP_SWD_CONFIGURE) ? 2U :
+            (p[0] == DAP_TRANSFER_CONFIGURE ? 6U : (p[0] == DAP_WRITE_ABORT ? 6U : (p[0] == DAP_SWJ_CLOCK ? 5U : 1U)));
+        break;
+    case DAP_SWJ_PINS: n = 7U; break;
+    case DAP_SWJ_SEQUENCE:
+        if (avail < 2U) return false;
+        n = (uint16_t)(2U + ((p[1] ? p[1] : 256U) + 7U) / 8U);
+        break;
+    case DAP_SWD_SEQUENCE:
+        if (avail < 2U) return false;
+        n = 2U;
+        for (i = 0U; i < p[1]; ++i) {
+            uint8_t info;
+            if (n >= avail) return false;
+            info = p[n++];
+            n = (uint16_t)(n + ((info & 0x3fU) ?
+                                ((info & 0x3fU) + 7U) / 8U : 8U));
+        }
+        break;
+    case DAP_TRANSFER:
+        if (avail < 3U || p[2] == 0U) return false;
+        n = 3U;
+        for (i = 0U; i < p[2]; ++i) {
+            if (n >= avail) return false;
+            if ((p[n] & 0x02U) == 0U || (p[n] & 0x10U) != 0U) n = (uint16_t)(n + 5U);
+            else ++n;
+        }
+        break;
+    case DAP_TRANSFER_BLOCK:
+        if (avail < 5U || p[2] == 0U || p[3] != 0U) return false;
+        n = 5U;
+        if ((p[4] & 0x02U) == 0U) n = (uint16_t)(n + (uint16_t)p[2] * 4U);
+        break;
+    default: n=1U; break;
+    }
+    if (n > avail || n > CMSIS_DAP_PACKET_SIZE) return false;
+    *out = (uint8_t)n;
+    return true;
+}
 
 static uint32_t decode_u32_le(const uint8_t *input)
 {
@@ -168,10 +227,37 @@ static void command_vendor_status(void)
 
 static void response_finish(uint8_t length)
 {
+    if (s_parent_active) {
+        if ((uint16_t)s_parent_response_offset + length > CMSIS_DAP_PACKET_SIZE) {
+            s_parent_active = false; s_response[0] = 0xFFU; s_response_length = 1U; s_response_ready = true; s_state = DAP_STATE_IDLE; return;
+        }
+        memcpy(&s_parent_response[s_parent_response_offset], s_response, length);
+        s_parent_response_offset = (uint8_t)(s_parent_response_offset + length);
+        ++s_parent_index;
+        s_state = DAP_STATE_IDLE;
+        if (s_parent_index == s_parent_count) {
+            s_parent_active = false; memcpy(s_response, s_parent_response, s_parent_response_offset); s_response_length = s_parent_response_offset; s_response_ready = true; return;
+        }
+        if (!parent_start_next()) { s_parent_active = false; s_response[0] = 0xFFU; s_response_length = 1U; s_response_ready = true; }
+        return;
+    }
     /* response-ready 置位后保持 busy，直到 USB 传输层复制走响应。 */
     s_response_length = length;
     s_response_ready = true;
     s_state = DAP_STATE_IDLE;
+}
+
+static bool parent_start_next(void)
+{
+    uint8_t len;
+    if (s_parent_request_offset >= s_parent_request_length ||
+        !command_length(&s_parent_request[s_parent_request_offset],
+                        (uint8_t)(s_parent_request_length - s_parent_request_offset), &len)) return false;
+    memcpy(s_request, &s_parent_request[s_parent_request_offset], len);
+    s_request_length = len;
+    s_parent_request_offset = (uint8_t)(s_parent_request_offset + len);
+    command_dispatch();
+    return true;
 }
 
 static void response_error(uint8_t command)
@@ -783,6 +869,7 @@ void cmsis_dap_init(void)
     s_data_phase = false;
     s_abort_requested = false;
     s_cancel_waiting = false;
+    s_parent_active = false;
 }
 
 bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
@@ -791,6 +878,25 @@ bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
         (length > sizeof(s_request)) ||
         (s_state != DAP_STATE_IDLE) || s_response_ready) {
         return false;
+    }
+    if (request[0] == 0x7FU) {
+        if (length < 2U || request[1] == 0U || request[1] > 8U ||
+            length > sizeof(s_parent_request)) {
+            s_response[0] = 0xFFU; response_finish(1U); return true;
+        }
+        memcpy(s_parent_request, request, length);
+        s_parent_count = request[1];
+        s_parent_index = 0U;
+        s_parent_request_offset = 2U;
+        s_parent_request_length = length;
+        s_parent_response_offset = 2U;
+        s_parent_response[0] = 0x7FU;
+        s_parent_response[1] = s_parent_count;
+        s_parent_active = true;
+        if (!parent_start_next()) {
+            s_parent_active = false; s_response[0] = 0xFFU; response_finish(1U);
+        }
+        return true;
     }
     memcpy(s_request, request, length);
     s_request_length = length;

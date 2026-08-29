@@ -48,6 +48,8 @@ bool swd_bridge_service_response_take(swd_tunnel_response_t *response);
 void swd_bridge_service_repeat_request(void);
 bool swd_bridge_service_cancel(uint8_t transaction_id);
 bool swd_bridge_service_request_active(void);
+/* 包含主机等待响应、从机执行请求和尚未取走的响应。 */
+bool swd_bridge_service_busy(void);
 uint32_t swd_bridge_service_cancellations(void);
 uint32_t swd_bridge_service_stale_responses(void);
 

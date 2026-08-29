@@ -27,6 +27,7 @@
 #include "radio_protocol.h"
 #include "radio_window.h"
 #include "serial_service.h"
+#include "serial_bridge_scheduler.h"
 #include "sx128x.h"
 #include "swd_bridge_service.h"
 #include "swd_tunnel.h"
@@ -38,8 +39,6 @@
 #define BRIDGE_PAYLOAD_SIZE         RADIO_PROTOCOL_PAYLOAD_SIZE
 #define BRIDGE_FRAME_SIZE           RADIO_PROTOCOL_FRAME_SIZE
 #define BRIDGE_ACK_TIMEOUT_MS       120U
-#define BRIDGE_TX_TURNAROUND_DELAY_US 200U
-#define BRIDGE_SWD_ACK_TIMEOUT_MS   600U
 #define BRIDGE_SWD_RESPONSE_TIMEOUT_MS 500U
 #define BRIDGE_ACTIVITY_MS          80U
 #define BRIDGE_MAX_RETRIES          5U
@@ -201,6 +200,21 @@ static bool radio_start_receive(void)
     return true;
 }
 
+static bool packet_status_read(sx128x_packet_status_t *status)
+{
+    if (status == NULL) {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    /* 固定 profile 不参与速率决策，ACK 也使用紧凑布局；省略一次
+     * GET_PACKET_STATUS SPI 事务可降低每个 FLRC 包的接收尾延迟。 */
+    if (!serial_bridge_packet_status_required(
+            device_config_get()->rate_mode == DEVICE_RATE_AUTO)) {
+        return true;
+    }
+    return sx128x_get_packet_status(status) == SX128X_RESULT_OK;
+}
+
 static bool radio_channel_set(uint8_t channel, bool start_receive)
 {
     if (!frequency_hopping_channel_valid(channel) ||
@@ -217,15 +231,15 @@ static bool radio_channel_set(uint8_t channel, bool start_receive)
 static bool frame_transmit(const uint8_t *frame, uint8_t length,
                            tx_kind_t kind)
 {
-    /* 同时只能有一个无线发送。TX_DONE 清除 s_tx_kind 并开启接收窗口，
-     * 然后才设置 ACK 截止时间。 */
+    /* 同时只能有一个无线发送。TX_DONE 清除 s_tx_kind，并按当前切换状态
+     * 恢复对应频道和 profile 的接收窗口，然后才设置 ACK 截止时间。 */
     if (s_tx_kind != TX_NONE) {
         return false;
     }
     if (kind == TX_ACK) {
         /* 对端在自己的 TX_DONE 中立即重开接收，只需覆盖那段 SPI 序列
          * （约 15 字节 + BUSY 握手）。毫秒级阻塞会直接吃掉烧录吞吐。 */
-        board_delay_us(BRIDGE_TX_TURNAROUND_DELAY_US);
+        board_delay_us(serial_bridge_ack_turnaround_delay_us());
     }
     if (sx128x_start_tx(frame, length) != SX128X_RESULT_OK) {
         return false;
@@ -283,11 +297,19 @@ static void reliable_queue(bridge_frame_type_t type,
 }
 
 static bool ack_send(uint32_t sequence,
-                     const sx128x_packet_status_t *status)
+                     const sx128x_packet_status_t *status,
+                     bool compact_requested)
 {
     uint8_t frame[BRIDGE_FRAME_SIZE];
     uint8_t payload[RADIO_PROTOCOL_ACK_PAYLOAD_SIZE];
     radio_protocol_ack_t ack;
+    bool hop_after_ack = false;
+    bool compact = compact_requested &&
+                   (device_config_get()->rate_mode != DEVICE_RATE_AUTO) &&
+                   !s_hop_request_pending;
+    uint8_t payload_length = compact
+                                 ? RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE
+                                 : RADIO_PROTOCOL_ACK_PAYLOAD_SIZE;
     uint8_t length;
 
     radio_window_rx_ack(&s_data_rx_window, &ack.ack_next, &ack.bitmap);
@@ -304,15 +326,26 @@ static bool ack_send(uint32_t sequence,
         ack.next_channel = frequency_hopping_select(
             &s_frequency_hopping, ++s_hop_generation, 0U,
             s_current_channel);
+        hop_after_ack = serial_bridge_hop_after_ack(
+            true, s_current_channel, ack.next_channel);
     }
-    if (!radio_protocol_ack_encode(payload, sizeof(payload), &ack)) {
+    if (compact) {
+        if (!radio_protocol_ack_encode_compact(
+                payload, payload_length, &ack)) {
+            return false;
+        }
+    } else if (!radio_protocol_ack_encode(payload, sizeof(payload), &ack)) {
         return false;
     }
     length = frame_build(frame, BRIDGE_FRAME_ACK, sequence, payload,
-                         sizeof(payload));
+                         payload_length);
 
     if (!frame_transmit(frame, length, TX_ACK)) {
         return false;
+    }
+    if (hop_after_ack) {
+        s_channel_after_ack = ack.next_channel;
+        s_channel_switch_after_ack = true;
     }
     s_hop_request_pending = false;
     return true;
@@ -449,26 +482,34 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
         }
         s_last_rx_key = key;
         valid_rx_mark();
-        if (!ack_send(sequence, rx_status)) {
+        if (!ack_send(sequence, rx_status, false)) {
             radio_fail();
         }
         return;
     }
     if (type == BRIDGE_FRAME_ACK) {
         radio_protocol_ack_t ack;
+        uint8_t data_active_before;
+        bool compact_ack;
 
         if (!radio_protocol_ack_decode(payload, length, &ack) ||
+            ((length == RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE) &&
+             (device_config_get()->rate_mode == DEVICE_RATE_AUTO)) ||
             (ack.profile >= SX128X_PROFILE_COUNT) ||
             !frequency_hopping_channel_valid(ack.current_channel) ||
             !remote_session_accept(view.session, false)) {
             return;
         }
+        compact_ack = length == RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE;
         valid_rx_mark();
-        s_last_remote_metrics.rssi_dbm_x2 = ack.rssi_dbm_x2;
-        s_last_remote_metrics.error_status = ack.error_status;
-        s_last_remote_metrics.tx_rx_status = ack.tx_rx_status;
-        s_last_remote_metrics.sync_address_status = ack.sync_address_status;
-        s_remote_metrics_valid = true;
+        if (!compact_ack) {
+            s_last_remote_metrics.rssi_dbm_x2 = ack.rssi_dbm_x2;
+            s_last_remote_metrics.error_status = ack.error_status;
+            s_last_remote_metrics.tx_rx_status = ack.tx_rx_status;
+            s_last_remote_metrics.sync_address_status = ack.sync_address_status;
+            s_remote_metrics_valid = true;
+        }
+        data_active_before = radio_window_tx_active(&s_data_tx_window);
         radio_window_tx_ack(&s_data_tx_window, ack.ack_next, ack.bitmap);
         if ((ack.flags & RADIO_PROTOCOL_ACK_FLAG_HOP_VALID) != 0U &&
             frequency_hopping_channel_valid(ack.next_channel) &&
@@ -486,6 +527,9 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                 &s_link_adaptation, s_last_remote_metrics.rssi_dbm_x2);
         }
         if (device_config_get()->device_mode == DEVICE_MODE_WIRELESS_HOST &&
+            serial_bridge_periodic_hop_progress(
+                data_active_before,
+                radio_window_tx_active(&s_data_tx_window)) &&
             ++s_hop_success_count >= BRIDGE_HOP_INTERVAL) {
             s_hop_success_count = 0U;
             s_hop_request_pending = true;
@@ -497,8 +541,7 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                 (pending_type == BRIDGE_FRAME_SWD_COMMAND) ||
                 (pending_type == RADIO_FRAME_SWD_BLOCK);
 
-            /* SWD 的无线 ACK 只确认请求帧到达；必须等匹配的隧道响应，
-             * 否则响应丢失时主机不会重发请求。 */
+            /* SWD ACK 只确认请求到达；必须继续等待匹配的隧道响应。 */
             if (!swd_pending_response) {
                 s_pending = false;
                 s_waiting_ack = false;
@@ -569,6 +612,17 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
         (type != BRIDGE_FRAME_HOP_CONFIRM) &&
         (type != BRIDGE_FRAME_SWD_ABORT)) {
         return;
+    }
+
+    if ((config->device_mode == DEVICE_MODE_WIRELESS_SLAVE) &&
+        s_pending &&
+        serial_bridge_next_swd_request_confirms_response(
+            (radio_frame_type_t)s_pending_frame[3], type)) {
+        /* 下一请求只会在主机收到上一响应后产生。显式响应 ACK 丢失时，
+         * 在分发新请求前释放旧响应槽，避免等待 120 ms 重试窗口。 */
+        s_pending = false;
+        s_waiting_ack = false;
+        s_retries = 0U;
     }
 
     duplicate = radio_protocol_key_equal(&key, &s_last_rx_key);
@@ -704,7 +758,12 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
             s_channel_after_ack != s_current_channel;
     }
     valid_rx_mark();
-    if (!ack_send(sequence, rx_status)) {
+    if (!serial_bridge_request_ack_required(type)) {
+        return;
+    }
+    if (!ack_send(sequence, rx_status,
+                  serial_bridge_ack_compact(
+                      type, config->rate_mode == DEVICE_RATE_AUTO))) {
         s_switch_after_ack = false;
         s_channel_switch_after_ack = false;
         radio_fail();
@@ -747,9 +806,8 @@ static void swd_radio_abort_poll(void)
          SX128X_RESULT_OK) ||
         (length > sizeof(frame)) ||
         (sx128x_read_buffer(offset, frame, length) !=
-         SX128X_RESULT_OK) ||
-        (sx128x_get_packet_status(&packet_status) !=
-         SX128X_RESULT_OK) ||
+          SX128X_RESULT_OK) ||
+         !packet_status_read(&packet_status) ||
         (sx128x_clear_irq_status(irq_status) != SX128X_RESULT_OK)) {
         radio_fail();
         return;
@@ -762,7 +820,7 @@ static void swd_radio_abort_poll(void)
         (void)swd_bridge_service_wireless_abort(view.payload[0]);
         valid_rx_mark();
         activity_signal();
-        if (!ack_send(view.sequence, &packet_status)) {
+        if (!ack_send(view.sequence, &packet_status, false)) {
             radio_fail();
         }
         return;
@@ -816,7 +874,7 @@ static void radio_irq_process(void)
             s_profile_trial_deadline =
                 board_millis() + BRIDGE_PROFILE_TRIAL_MS;
             ++s_profile_switches;
-        } else {
+        } else if (serial_bridge_resume_rx_after_tx(completed == TX_ACK)) {
             if (!radio_start_receive()) {
                 radio_fail();
                 return;
@@ -825,13 +883,9 @@ static void radio_irq_process(void)
         if ((completed == TX_RELIABLE) && s_pending) {
             s_waiting_ack = true;
             s_deadline = board_millis() +
-                         ((s_pending_frame[3] ==
-                                  BRIDGE_FRAME_SWD_COMMAND) ||
-                          (s_pending_frame[3] == RADIO_FRAME_SWD_BLOCK)
-                              ? BRIDGE_SWD_ACK_TIMEOUT_MS
-                              : BRIDGE_ACK_TIMEOUT_MS) +
-                         ((board_device_id_hash() +
-                           (uint32_t)s_retries * 17U) % 41U);
+                         serial_bridge_reliable_ack_wait_ms(
+                             (radio_frame_type_t)s_pending_frame[3],
+                             board_device_id_hash(), s_retries);
         }
         return;
     }
@@ -854,8 +908,7 @@ static void radio_irq_process(void)
              SX128X_RESULT_OK) ||
             (length > sizeof(frame)) ||
             (sx128x_read_buffer(offset, frame, length) != SX128X_RESULT_OK) ||
-            (sx128x_get_packet_status(&packet_status) !=
-             SX128X_RESULT_OK) ||
+            !packet_status_read(&packet_status) ||
             (sx128x_clear_irq_status(irq_status) != SX128X_RESULT_OK)) {
             radio_fail();
             return;
@@ -1048,8 +1101,8 @@ void serial_bridge_process(void)
     /* 轮询顺序固定：先排空本地串口输入，再完成 SWD，最后处理有线或无线
      * 传输状态。 */
     serial_service_process();
-    swd_tunnel_process_pending();
     if (config->device_mode == DEVICE_MODE_WIRED) {
+        swd_tunnel_process_pending();
         if (serial_service_wired_process()) {
             activity_signal();
         }
@@ -1071,7 +1124,12 @@ void serial_bridge_process(void)
     if (!s_radio_ready) {
         return;
     }
+    /* 先处理无线 IRQ 并在 TX_DONE 后恢复 RX，再推进从机 SWD。这样既允许
+     * 短 block 在同一轮主循环完成，也为对端重新开启接收保留转向窗口。 */
+    swd_tunnel_process_pending();
     if ((config->rate_mode == DEVICE_RATE_AUTO) &&
+        serial_bridge_background_recovery_allowed(
+            swd_bridge_service_busy()) &&
         (s_tx_kind == TX_NONE) &&
         (!s_pending ||
          ((s_pending_frame[3] != BRIDGE_FRAME_PROFILE_SWITCH) &&
@@ -1184,11 +1242,14 @@ void serial_bridge_process(void)
         return;
     }
     if (!s_pending && (s_tx_kind == TX_NONE) &&
+        serial_bridge_background_recovery_allowed(
+            swd_bridge_service_busy()) &&
         (radio_window_tx_active(&s_data_tx_window) == 0U) &&
         !s_profile_trial && !s_channel_trial &&
         ((int32_t)(board_millis() - s_channel_scan_at) >= 0)) {
-        uint8_t scan_channel =
-            recovery_channel_get(board_millis());
+        uint8_t scan_channel = serial_bridge_idle_recovery_channel(
+            frequency_hopping_rendezvous(&s_frequency_hopping),
+            recovery_channel_get(board_millis()));
 
         if ((scan_channel != s_current_channel) &&
             !radio_channel_set(scan_channel, true)) {

@@ -32,7 +32,6 @@
 #define SWD_TRANSFER_APNDP              0x01U
 #define SWD_TRANSFER_RNW                0x02U
 #define SWD_DP_RDBUFF_READ              0x0EU
-#define SWD_TUNNEL_MAX_MATCH_RETRIES    128U
 #define SWD_TUNNEL_DEFAULT_WAIT_RETRIES 100U
 #define SWD_TUNNEL_MAX_WAIT_RETRIES     1024U
 #define SWD_TUNNEL_EXECUTION_BUDGET_MS 2500U
@@ -66,6 +65,8 @@ static bool s_transfer_async;
 static bool s_transfer_poll_pending;
 static bool s_transfer_post_read;
 static bool s_transfer_check_write;
+static bool s_transfer_match_ap_posted;
+static uint16_t s_transfer_match_retries;
 typedef enum {
     TRANSFER_PHASE_NORMAL = 0,
     TRANSFER_PHASE_POST_READ,
@@ -320,9 +321,15 @@ uint8_t swd_tunnel_encode_pins(uint8_t transaction_id,
 static bool block_request_supported(uint8_t request)
 {
     return !((((request & SWD_TRANSFER_MATCH_MASK) != 0U) &&
-              ((request & 0x02U) != 0U)) ||
+              ((request & SWD_TRANSFER_RNW) != 0U)) ||
              (((request & SWD_TRANSFER_MATCH_VALUE) != 0U) &&
-              ((request & 0x02U) == 0U)));
+              ((request & SWD_TRANSFER_RNW) == 0U)));
+}
+
+static bool block_request_has_data(uint8_t request)
+{
+    return ((request & SWD_TRANSFER_RNW) == 0U) ||
+           ((request & SWD_TRANSFER_MATCH_VALUE) != 0U);
 }
 
 uint8_t swd_tunnel_encode_block(
@@ -330,9 +337,9 @@ uint8_t swd_tunnel_encode_block(
     uint8_t count, uint8_t *payload)
 {
     uint8_t index;
-    uint8_t write_count = 0U;
+    uint8_t data_count = 0U;
     uint16_t length;
-    uint16_t write_offset;
+    uint16_t data_offset;
 
     if ((payload == NULL) || (transfers == NULL) || (count == 0U) ||
         (count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS)) {
@@ -345,24 +352,24 @@ uint8_t swd_tunnel_encode_block(
         if (!block_request_supported(request)) {
             return 0U;
         }
-        if ((request & 0x02U) == 0U) {
-            ++write_count;
+        if (block_request_has_data(request)) {
+            ++data_count;
         }
     }
-    length = (uint16_t)(length + (uint16_t)write_count * 4U);
+    length = (uint16_t)(length + (uint16_t)data_count * 4U);
     if (length > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) {
         return 0U;
     }
     payload[0] = transaction_id;
     payload[1] = count;
-    write_offset = (uint16_t)(2U + count);
+    data_offset = (uint16_t)(2U + count);
     for (index = 0U; index < count; ++index) {
         uint8_t request = transfers[index].request & 0x3FU;
 
         payload[2U + index] = request;
-        if ((request & 0x02U) == 0U) {
-            encode_u32_le(&payload[write_offset], transfers[index].data);
-            write_offset = (uint16_t)(write_offset + 4U);
+        if (block_request_has_data(request)) {
+            encode_u32_le(&payload[data_offset], transfers[index].data);
+            data_offset = (uint16_t)(data_offset + 4U);
         }
     }
     return (uint8_t)length;
@@ -372,8 +379,8 @@ bool swd_tunnel_decode_block(const uint8_t *payload, uint8_t length,
                              swd_tunnel_block_t *block)
 {
     uint8_t index;
-    uint8_t write_count = 0U;
-    uint16_t write_offset;
+    uint8_t data_count = 0U;
+    uint16_t data_offset;
     uint16_t expected_length;
 
     if ((payload == NULL) || (block == NULL) || (length < 3U) ||
@@ -391,21 +398,21 @@ bool swd_tunnel_decode_block(const uint8_t *payload, uint8_t length,
         }
         block->transfers[index].request = request;
         block->transfers[index].data = 0U;
-        if ((request & 0x02U) == 0U) {
-            ++write_count;
+        if (block_request_has_data(request)) {
+            ++data_count;
         }
     }
     expected_length = (uint16_t)(2U + block->count +
-                                 (uint16_t)write_count * 4U);
+                                 (uint16_t)data_count * 4U);
     if ((expected_length != length) ||
         (expected_length > SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
         return false;
     }
-    write_offset = (uint16_t)(2U + block->count);
+    data_offset = (uint16_t)(2U + block->count);
     for (index = 0U; index < block->count; ++index) {
-        if ((block->transfers[index].request & 0x02U) == 0U) {
-            block->transfers[index].data = decode_u32_le(&payload[write_offset]);
-            write_offset = (uint16_t)(write_offset + 4U);
+        if (block_request_has_data(block->transfers[index].request)) {
+            block->transfers[index].data = decode_u32_le(&payload[data_offset]);
+            data_offset = (uint16_t)(data_offset + 4U);
         }
     }
     return true;
@@ -495,9 +502,6 @@ static bool execute_immediate(const uint8_t *request,
         }
         s_match_retry =
             (uint16_t)request[5] | ((uint16_t)request[6] << 8);
-        if (s_match_retry > SWD_TUNNEL_MAX_MATCH_RETRIES) {
-            s_match_retry = SWD_TUNNEL_MAX_MATCH_RETRIES;
-        }
         s_transfer_wait_retry_limit =
             (uint16_t)request[3] | ((uint16_t)request[4] << 8);
         if (s_transfer_wait_retry_limit > SWD_TUNNEL_MAX_WAIT_RETRIES) {
@@ -600,6 +604,8 @@ static void transfer_async_start(void)
     s_transfer_poll_pending = false;
     s_transfer_post_read = false;
     s_transfer_check_write = false;
+    s_transfer_match_ap_posted = false;
+    s_transfer_match_retries = 0U;
     s_transfer_phase = TRANSFER_PHASE_NORMAL;
     s_transfer_async = true;
     s_executing = true;
@@ -611,6 +617,14 @@ static bool transfer_is_plain_ap_read(uint8_t request)
     return (request & (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW |
                        SWD_TRANSFER_MATCH_VALUE)) ==
            (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW);
+}
+
+static bool transfer_is_match_ap_read(uint8_t request)
+{
+    return (request & (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW |
+                       SWD_TRANSFER_MATCH_VALUE)) ==
+           (SWD_TRANSFER_APNDP | SWD_TRANSFER_RNW |
+            SWD_TRANSFER_MATCH_VALUE);
 }
 
 static uint8_t transfer_request_at(uint8_t index)
@@ -666,6 +680,8 @@ static bool transfer_async_step(void)
                     0U);
                 ++s_transfer_index;
                 ++s_transfer_completed;
+                s_transfer_match_ap_posted = false;
+                s_transfer_match_retries = 0U;
                 s_transfer_wait_retries = 0U;
                 return true;
             }
@@ -712,12 +728,28 @@ static bool transfer_async_step(void)
     } else if (s_transfer_phase == TRANSFER_PHASE_WRITE_CHECK) {
         s_transfer_check_write = false;
     } else {
-        if ((request & SWD_TRANSFER_MATCH_VALUE) != 0U &&
-            ((s_transfer_data & s_match_mask) !=
-             transfer_data_at(s_transfer_index))) {
-            transfer_async_finish((target_swd_ack_t)(
-                (uint8_t)ack | SWD_TRANSFER_MISMATCH));
-            return false;
+        if ((request & SWD_TRANSFER_MATCH_VALUE) != 0U) {
+            if (transfer_is_match_ap_read(request) &&
+                !s_transfer_match_ap_posted) {
+                /* AP read 是 posted transfer。第一次只发起读取；从第二次
+                 * AP read 开始取得并比较前一次结果。 */
+                s_transfer_match_ap_posted = true;
+                s_transfer_wait_retries = 0U;
+                return true;
+            }
+            if ((s_transfer_data & s_match_mask) !=
+                transfer_data_at(s_transfer_index)) {
+                if (s_transfer_match_retries < s_match_retry) {
+                    ++s_transfer_match_retries;
+                    s_transfer_wait_retries = 0U;
+                    return true;
+                }
+                /* 与 Arm DAP_SWD_Transfer 一致：耗尽重试后返回
+                 * VALUE_MISMATCH，但失败的 Match Value 项不计入 completed。 */
+                transfer_async_finish((target_swd_ack_t)(
+                    (uint8_t)ack | SWD_TRANSFER_MISMATCH));
+                return false;
+            }
         }
         if (transfer_is_plain_ap_read(request)) {
             if (s_transfer_post_read) {
@@ -738,6 +770,8 @@ static bool transfer_async_step(void)
         }
         ++s_transfer_index;
         ++s_transfer_completed;
+        s_transfer_match_ap_posted = false;
+        s_transfer_match_retries = 0U;
     }
     s_transfer_wait_retries = 0U;
     if ((s_transfer_index >= s_transfer_count) &&
@@ -748,11 +782,11 @@ static bool transfer_async_step(void)
     return true;
 }
 
-static void transfer_async_process(void)
+static void transfer_async_process(uint32_t batch_budget_us)
 {
     uint32_t started_cycles = board_cycle_count();
     uint32_t budget_cycles =
-        board_cycles_from_us(SWD_TUNNEL_BATCH_BUDGET_US);
+        board_cycles_from_us(batch_budget_us);
 
     /* 一个 block 内的相邻事务之间没有主机往返依赖，因此在一次主循环内
      * 连续执行，只在时间预算耗尽时让出。这把每个字的成本从"两轮主循环"
@@ -812,14 +846,14 @@ bool swd_tunnel_submit_block(uint8_t transaction_id,
     return true;
 }
 
-void swd_tunnel_process(void)
+void swd_tunnel_process_budget(uint32_t batch_budget_us)
 {
     uint32_t wait_us;
     uint8_t pins;
 
     /* 长操作按时间预算推进，限制主循环延迟，并为取消长传输留出机会。 */
     if (s_transfer_async) {
-        transfer_async_process();
+        transfer_async_process(batch_budget_us);
         return;
     }
     if (s_request_ready) {
@@ -829,7 +863,7 @@ void swd_tunnel_process(void)
             /* 启动后立刻在同一次调用内按预算执行，避免只为初始化状态机就
              * 白付一轮主循环调度。 */
             transfer_async_start();
-            transfer_async_process();
+            transfer_async_process(batch_budget_us);
             return;
         }
         if (s_request[0] != SWD_TUNNEL_OP_PINS) {
@@ -887,6 +921,11 @@ void swd_tunnel_process(void)
     s_response_length = SWD_TUNNEL_RESPONSE_HEADER_SIZE + 4U;
     s_pending = false;
     s_response_ready = true;
+}
+
+void swd_tunnel_process(void)
+{
+    swd_tunnel_process_budget(SWD_TUNNEL_BATCH_BUDGET_US);
 }
 
 void swd_tunnel_cancel(void)

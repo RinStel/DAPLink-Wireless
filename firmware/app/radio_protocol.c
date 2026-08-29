@@ -155,17 +155,41 @@ bool radio_protocol_ack_encode(uint8_t *payload, uint8_t capacity,
     return true;
 }
 
+bool radio_protocol_ack_encode_compact(
+    uint8_t *payload, uint8_t capacity, const radio_protocol_ack_t *ack)
+{
+    if ((payload == NULL) || (ack == NULL) ||
+        (capacity < RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE)) {
+        return false;
+    }
+    encode_u32_be(&payload[0], ack->ack_next);
+    encode_u32_be(&payload[4], ack->bitmap);
+    return true;
+}
+
 bool radio_protocol_ack_decode(const uint8_t *payload, uint8_t length,
                                radio_protocol_ack_t *ack)
 {
     uint16_t rssi;
 
     if ((payload == NULL) || (ack == NULL) ||
-        (length != RADIO_PROTOCOL_ACK_PAYLOAD_SIZE)) {
+        ((length != RADIO_PROTOCOL_ACK_PAYLOAD_SIZE) &&
+         (length != RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE))) {
         return false;
     }
     ack->ack_next = decode_u32_be(&payload[0]);
     ack->bitmap = decode_u32_be(&payload[4]);
+    if (length == RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE) {
+        ack->flags = 0U;
+        ack->next_channel = 0U;
+        ack->rssi_dbm_x2 = 0;
+        ack->error_status = 0U;
+        ack->tx_rx_status = 0U;
+        ack->sync_address_status = 0U;
+        ack->profile = 0U;
+        ack->current_channel = 0U;
+        return true;
+    }
     ack->flags = payload[8];
     ack->next_channel = payload[9];
     rssi = (uint16_t)payload[10] << 8 | payload[11];

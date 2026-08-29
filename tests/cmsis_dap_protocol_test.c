@@ -14,6 +14,7 @@
 #define DAP_TRANSFER           0x05U
 #define DAP_RESET_TARGET       0x0AU
 #define DAP_SWD_SEQUENCE       0x1DU
+#define DAP_EXECUTE_COMMANDS   0x7FU
 #define CMSIS_DAP_PROTOCOL_VERSION "2.1.2"
 
 static uint32_t s_now_ms;
@@ -356,13 +357,25 @@ int main(void)
     request[4] = 0xFFU;
     request[8] = 0x12U;
     request[9] = 0x34U;
+    request[10] = 0x12U;
+    request[11] = 0xCDU;
+    request[12] = 0xABU;
     assert(cmsis_dap_submit(request, 13U));
     assert(s_captured_transfer_count == 2U);
     assert(s_captured_transfers[0].request == 0x20U);
     assert(s_captured_transfers[1].request == 0x12U);
+    assert(s_captured_transfers[1].data == 0xABCD1234U);
     bridge_complete(SWD_TUNNEL_OP_BLOCK, 2U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 3U);
     assert(response[1] == 2U);
+
+    /* Arm DAP_SWD_Transfer 不把触发 Value Mismatch 的项计入
+     * Transfer Count，且不在响应中返回 Match Value 读数据。 */
+    assert(cmsis_dap_submit(request, 13U));
+    bridge_complete(SWD_TUNNEL_OP_BLOCK, 1U, 0x11U);
+    assert(response_take(response) == 3U);
+    assert(response[1] == 1U);
+    assert(response[2] == 0x11U);
 
     memset(request, 0, sizeof(request));
     request[0] = DAP_SWD_SEQUENCE;
@@ -467,6 +480,22 @@ int main(void)
     assert(response[0] == DAP_TRANSFER);
     assert(response[1] == 1U);
     assert(response[2] == TARGET_SWD_ACK_OK);
+
+    /* 官方 DAP_ExecuteCommands：多个完整子命令聚合为一个响应。 */
+    memset(request, 0, sizeof(request));
+    request[0] = DAP_EXECUTE_COMMANDS;
+    request[1] = 2U;
+    request[2] = DAP_INFO;
+    request[3] = 0x01U;
+    request[4] = DAP_INFO;
+    request[5] = 0x02U;
+    assert(cmsis_dap_submit(request, 6U));
+    length = response_take(response);
+    assert(length == 24U);
+    assert(response[0] == DAP_EXECUTE_COMMANDS);
+    assert(response[1] == 2U);
+    assert(response[2] == DAP_INFO);
+    assert(response[12] == DAP_INFO);
 
     return 0;
 }

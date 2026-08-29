@@ -22,11 +22,13 @@
 #include <stdint.h>
 
 /* 线格式为 magic[2]、version、type、network/session/sequence（BE32），
- * 第 16 字节为 payload_length，第 17 字节开始为 payload。 */
+ * 第 16 字节为 payload_length，第 17 字节开始为 payload。v3 仅改变
+ * ACK 编码和 SWD 调度语义，不保留旧无线固件兼容路径。 */
 #define RADIO_PROTOCOL_HEADER_SIZE  17U
 #define RADIO_PROTOCOL_PAYLOAD_SIZE 110U
-#define RADIO_PROTOCOL_VERSION       2U
+#define RADIO_PROTOCOL_VERSION       3U
 #define RADIO_PROTOCOL_ACK_PAYLOAD_SIZE 17U
+#define RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE 8U
 #define RADIO_PROTOCOL_FRAME_SIZE \
     (RADIO_PROTOCOL_HEADER_SIZE + RADIO_PROTOCOL_PAYLOAD_SIZE)
 
@@ -91,6 +93,8 @@ bool radio_protocol_key_equal(const radio_frame_key_t *left,
                               const radio_frame_key_t *right);
 bool radio_protocol_ack_encode(uint8_t *payload, uint8_t capacity,
                                const radio_protocol_ack_t *ack);
+bool radio_protocol_ack_encode_compact(
+    uint8_t *payload, uint8_t capacity, const radio_protocol_ack_t *ack);
 bool radio_protocol_ack_decode(const uint8_t *payload, uint8_t length,
                                radio_protocol_ack_t *ack);
 

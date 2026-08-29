@@ -6,10 +6,12 @@
 
 /* SPI 替身返回芯片状态/数据，逐字节校验命令帧。 */
 #define OPCODE_SET_PACKET_TYPE    0x8AU
+#define OPCODE_SET_MODULATION     0x8BU
 #define OPCODE_SET_PACKET_PARAMS  0x8CU
 #define OPCODE_SET_STANDBY        0x80U
 #define OPCODE_SET_RX             0x82U
 #define OPCODE_SET_TX             0x83U
+#define OPCODE_WRITE_REGISTER     0x18U
 #define OPCODE_GET_PACKET_TYPE    0x03U
 #define OPCODE_SET_DIO_IRQ_PARAMS 0x8DU
 #define OPCODE_GET_STATUS         0xC0U
@@ -25,6 +27,9 @@ static uint16_t s_irq_mask;
 static uint16_t s_dio1_mask;
 static uint8_t s_get_status_length;
 static uint16_t s_packet_params_commands;
+static uint8_t s_last_modulation[4U];
+static uint8_t s_last_packet_params[8U];
+static uint8_t s_last_flrc_sync[4U];
 static test_radio_mode_t s_radio_mode;
 static bool s_packet_params_while_active;
 
@@ -41,6 +46,8 @@ radio_result_t radio_hal_transaction(const uint8_t *tx_data,
     }
     if ((tx_data[0] == OPCODE_SET_PACKET_TYPE) && (length == 2U)) {
         s_packet_type = tx_data[1];
+    } else if ((tx_data[0] == OPCODE_SET_MODULATION) && (length == 4U)) {
+        memcpy(s_last_modulation, tx_data, sizeof(s_last_modulation));
     } else if ((tx_data[0] == OPCODE_SET_STANDBY) && (length == 2U)) {
         s_radio_mode = TEST_RADIO_STANDBY;
     } else if ((tx_data[0] == OPCODE_SET_RX) && (length == 4U)) {
@@ -60,7 +67,13 @@ radio_result_t radio_hal_transaction(const uint8_t *tx_data,
         if (s_radio_mode != TEST_RADIO_STANDBY) {
             s_packet_params_while_active = true;
         }
+        memcpy(s_last_packet_params, tx_data,
+               sizeof(s_last_packet_params));
         ++s_packet_params_commands;
+    } else if ((tx_data[0] == OPCODE_WRITE_REGISTER) &&
+               (length == 7U) && (tx_data[1] == 0x09U) &&
+               (tx_data[2] == 0xCFU)) {
+        memcpy(s_last_flrc_sync, &tx_data[3], sizeof(s_last_flrc_sync));
     } else if ((tx_data[0] == OPCODE_GET_STATUS) && (length == 2U)) {
         assert(rx_data != NULL);
         s_get_status_length = (uint8_t)length;
@@ -72,6 +85,55 @@ radio_result_t radio_hal_transaction(const uint8_t *tx_data,
 void radio_hal_frontend_set(radio_frontend_mode_t mode)
 {
     (void)mode;
+}
+
+static void test_flrc_packet_params_disable_whitening(void)
+{
+    static const uint8_t expected[] = {
+        0x8CU, 0x30U, 0x04U, 0x10U,
+        0x20U, 0x7FU, 0x10U, 0x08U
+    };
+
+    assert(sx128x_init_flrc() == SX128X_RESULT_OK);
+    assert(memcmp(s_last_packet_params, expected, sizeof(expected)) == 0);
+}
+
+static void test_flrc_profiles_follow_application_configuration_path(void)
+{
+    static const uint8_t network_sync[] = {
+        0x44U, 0x41U, 0x50U, 0x4CU, 0x49U
+    };
+    static const uint8_t expected_packet_params[] = {
+        0x8CU, 0x30U, 0x04U, 0x10U,
+        0x20U, 0x7FU, 0x10U, 0x08U
+    };
+    static const uint8_t expected_flrc_1m3[] = {
+        0x8BU, 0x45U, 0x02U, 0x20U
+    };
+    static const uint8_t expected_flrc_650k[] = {
+        0x8BU, 0x86U, 0x02U, 0x20U
+    };
+
+    assert(sx128x_init_gfsk() == SX128X_RESULT_OK);
+    assert(sx128x_set_network_sync(network_sync) == SX128X_RESULT_OK);
+
+    assert(sx128x_set_profile(SX128X_PROFILE_FLRC_1M3) ==
+           SX128X_RESULT_OK);
+    assert(s_packet_type == 0x03U);
+    assert(memcmp(s_last_modulation, expected_flrc_1m3,
+                  sizeof(expected_flrc_1m3)) == 0);
+    assert(memcmp(s_last_packet_params, expected_packet_params,
+                  sizeof(expected_packet_params)) == 0);
+    assert(memcmp(s_last_flrc_sync, network_sync,
+                  sizeof(s_last_flrc_sync)) == 0);
+
+    assert(sx128x_set_profile(SX128X_PROFILE_FLRC_650K) ==
+           SX128X_RESULT_OK);
+    assert(s_packet_type == 0x03U);
+    assert(memcmp(s_last_modulation, expected_flrc_650k,
+                  sizeof(expected_flrc_650k)) == 0);
+    assert(memcmp(s_last_packet_params, expected_packet_params,
+                  sizeof(expected_packet_params)) == 0);
 }
 
 static void test_tx_enters_standby_before_packet_params(void)
@@ -125,6 +187,8 @@ int main(void)
     assert(s_packet_type == 0x03U);
     assert(s_irq_mask == required);
     assert(s_dio1_mask == required);
+    test_flrc_packet_params_disable_whitening();
+    test_flrc_profiles_follow_application_configuration_path();
     test_tx_enters_standby_before_packet_params();
     test_packet_params_cache_tracks_current_hardware_state();
     return 0;

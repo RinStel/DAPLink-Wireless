@@ -110,6 +110,8 @@ bool swd_tunnel_submit_block(uint8_t transaction_id,
                              const swd_tunnel_transfer_t *transfers,
                              uint8_t count);
 void swd_tunnel_process(void);
+/* 调用方可以为当前执行环境指定单轮 block 预算。 */
+void swd_tunnel_process_budget(uint32_t batch_budget_us);
 /* 取消采用协作式处理，在后续 process 调用中完成。 */
 void swd_tunnel_cancel(void);
 bool swd_tunnel_response_take(uint8_t *response,

@@ -4,6 +4,11 @@
       "path": "Third-Party/CMSIS-DAP",
       "url": "https://github.com/ARM-software/CMSIS-DAP.git",
       "commit": "6256803b7ac93731ec22e24e0ae8d91df3a7c953"
+    },
+    {
+      "path": "vendor/Arm-CMSIS-DAP",
+      "url": "https://github.com/ARM-software/CMSIS-DAP.git",
+      "commit": "12636590eec66fae2d1bba4518749426ad5a4595"
     }
   ],
   "vendor_snapshots": [

@@ -8,8 +8,8 @@ DAPLink-Wireless 使用两块相同硬件构成无线 CMSIS-DAP v2 调试器。�
 CMSIS-DAP v2 Bulk、CDC ACM 虚拟串口和 MSC 配置磁盘；`WIRELESS_SLAVE` 仅提供
 MSC 配置磁盘。
 
-当前状态：无线链路协议版本为 `v2`，
-无线帧头偏移 2 的协议字段为 `02`。现有发布文档使用硬件版本 `v0.5`；
+当前状态：无线链路协议版本为 `v3`，
+无线帧头偏移 2 的协议字段为 `03`。旧无线固件不兼容。现有发布文档使用硬件版本 `v0.5`；
 EasyEDA 当前读取到的 `Board_V1.0` 与项目文档中的 `v0.5` 对应关系为 `待确认：`。
 
 项目只提供 CMSIS-DAP v2 Bulk 接口，不兼容 CMSIS-DAP v1 HID。
@@ -182,6 +182,6 @@ JTAG、SWO 和时间戳尚未实现，能力位不会声明这些功能。`DAP_T
 ## 相关手册
 
 - [硬件手册](hardware_manual.md)：原理图基线、当前 GPIO 差异、上电与实机验收。
-- [无线手册](wireless_manual.md)：协议 v2、窗口 ACK、profile、跳频和射频冒烟测试。
+- [无线手册](wireless_manual.md)：协议 v3、窗口 ACK、profile、跳频和射频冒烟测试。
 - [开发与发布手册](development_release_manual.md)：测试、依赖、发布门禁和 CMSIS-DAP 验证。
 - [U5 原理图连接记录](schematic_u5_connections.md)：EasyEDA 读取的完整网络事实。

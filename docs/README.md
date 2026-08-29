@@ -6,7 +6,7 @@
 
 - [项目手册：产品、固件与 USB 配置](project_manual.md)
 - [硬件手册：原理图、板级安全与验收](hardware_manual.md)
-- [无线手册：协议 v2-only、跳频与射频验证](wireless_manual.md)
+- [无线手册：协议 v3-only、跳频与射频验证](wireless_manual.md)
 - [开发与发布手册：验证、依赖和门禁](development_release_manual.md)
 
 ## 原理图与版本事实
@@ -21,8 +21,8 @@
 
 ## 版本说明
 
-无线帧协议版本为 `v2`，帧头字段为 `02`。接收端拒绝 v1 和未知版本，发送端
-不保留 v1 路径。
+无线帧协议版本为 `v3`，帧头字段为 `03`。接收端拒绝 v2、v1 和未知版本，发送端
+不保留旧版本路径。两块无线板必须使用同一固件版本。
 
 第三方 CMSIS-DAP 文档位于 `Third-Party/CMSIS-DAP/**`，属于上游资料，不在本项目
 手册中重写。

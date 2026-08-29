@@ -20,6 +20,7 @@ int main(void)
     assert(target_swd_normalize_clock(0U) == 100000U);
     assert(target_swd_normalize_clock(1000U) == 10000U);
     assert(target_swd_normalize_clock(2000000U) == 2000000U);
+    assert(target_swd_normalize_clock(4000000U) == 4000000U);
     assert(target_swd_normalize_clock(10000000U) == 4000000U);
     assert((updated_ctl1 & TARGET_SWDIO_CTL_MASK) == (0x8U << 16));
     assert((updated_ctl1 & (0xFU << 20)) == (0xAU << 20));

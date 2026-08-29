@@ -9,7 +9,10 @@ class SerialBridgeTurnaroundTest(unittest.TestCase):
         start = source.index("static bool frame_transmit")
         end = source.index("static bool data_frame_transmit", start)
         function = source[start:end]
-        self.assertIn("BRIDGE_TX_TURNAROUND_DELAY_US 200U", source)
+        scheduler = (Path(__file__).resolve().parents[1] /
+                     "firmware/app/serial_bridge_scheduler.h").read_text(
+                         encoding="utf-8")
+        self.assertIn("SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US 200U", scheduler)
         self.assertIn("kind == TX_ACK", function)
         self.assertLess(function.index("board_delay_us"),
                         function.index("sx128x_start_tx"))

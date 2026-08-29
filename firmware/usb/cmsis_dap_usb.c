@@ -27,6 +27,8 @@
 
 #define NO_CMD             0xFFU
 #define DAP_TRANSFER_ABORT 0x07U
+#define DAP_QUEUE_COMMANDS 0x7EU
+#define DAP_EXECUTE_COMMANDS 0x7FU
 /* 在对外公布的四包窗口之外保留一个内部请求槽，使普通请求排队时仍能接收
  * DAP_TransferAbort。 */
 #define DAP_USB_RING_SIZE  (DAP_USB_PACKET_COUNT + 2U)
@@ -234,6 +236,15 @@ void cmsis_dap_usb_process(void)
     }
     if (!cmsis_dap_busy() && request_available()) {
         request = &s_transport.requests[s_transport.request_read];
+        /* Arm 模板把 QueueCommands 包转换为 ExecuteCommands；仅有一个
+         * Queue 包时暂缓，等待后续 USB 包到达以保持队列语义。 */
+        if (request->data[0] == DAP_QUEUE_COMMANDS) {
+            uint8_t next = ring_next(s_transport.request_read);
+            if (next == s_transport.request_write) {
+                return;
+            }
+            request->data[0] = DAP_EXECUTE_COMMANDS;
+        }
         if (cmsis_dap_submit(request->data, request->length)) {
             s_transport.request_read =
                 ring_next(s_transport.request_read);

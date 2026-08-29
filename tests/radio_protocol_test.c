@@ -24,7 +24,7 @@ int main(void)
                                   0x12345678U, 0xAABBCCDDU,
                                   7U, payload, sizeof(payload));
     assert(length == RADIO_PROTOCOL_HEADER_SIZE + sizeof(payload));
-    assert(frame[2] == 2U);
+    assert(frame[2] == 3U);
     assert(frame[2] == RADIO_PROTOCOL_VERSION);
     assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
     assert(view.type == RADIO_FRAME_DATA);
@@ -39,6 +39,8 @@ int main(void)
     ++second.sequence;
     assert(!radio_protocol_key_equal(&first, &second));
 
+    frame[2] = 2U;
+    assert(!radio_protocol_parse(frame, length, 0x12345678U, &view));
     frame[2] = 1U;
     assert(!radio_protocol_parse(frame, length, 0x12345678U, &view));
     frame[2] = RADIO_PROTOCOL_VERSION;
@@ -100,6 +102,16 @@ int main(void)
     assert(!radio_protocol_ack_decode(
         frame, (uint8_t)(RADIO_PROTOCOL_ACK_PAYLOAD_SIZE - 1U),
         &decoded_ack));
+
+    assert(radio_protocol_ack_encode_compact(
+        frame, RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE, &ack));
+    assert(radio_protocol_ack_decode(
+        frame, RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE, &decoded_ack));
+    assert(decoded_ack.ack_next == ack.ack_next);
+    assert(decoded_ack.bitmap == ack.bitmap);
+    assert(decoded_ack.flags == 0U);
+    assert(decoded_ack.next_channel == 0U);
+    assert(decoded_ack.rssi_dbm_x2 == 0);
 
     frequency_hopping_init(&hopping, 0x12345678U);
     channel = frequency_hopping_rendezvous(&hopping);

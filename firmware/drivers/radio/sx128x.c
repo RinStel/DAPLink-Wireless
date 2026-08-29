@@ -70,7 +70,7 @@
 #define SX128X_FLRC_MATCH_SYNC_WORD_1 0x10U
 #define SX128X_PACKET_VARIABLE_LENGTH 0x20U
 #define SX128X_FLRC_CRC_2_BYTES       0x10U
-#define SX128X_FLRC_WHITENING_ENABLE  0x00U
+#define SX128X_FLRC_WHITENING_DISABLE 0x08U
 #define SX128X_TX_POWER_MINUS_2_DBM   0x10U
 #define SX128X_TX_RAMP_20_US          0xE0U
 #define SX128X_TIMEOUT_BASE_1_MS      0x02U
@@ -187,7 +187,7 @@ static sx128x_result_t set_packet_params(uint8_t payload_length)
         command[2] = SX128X_FLRC_SYNC_WORD_32_BITS;
         command[3] = SX128X_FLRC_MATCH_SYNC_WORD_1;
         command[6] = SX128X_FLRC_CRC_2_BYTES;
-        command[7] = SX128X_FLRC_WHITENING_ENABLE;
+        command[7] = SX128X_FLRC_WHITENING_DISABLE;
     }
 
     if (s_packet_params_valid &&
