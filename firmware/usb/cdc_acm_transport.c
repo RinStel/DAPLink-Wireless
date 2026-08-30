@@ -1,4 +1,4 @@
-﻿/*
+/*
  * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
  * Copyright (C) 2025 RinStel <me@rinx.nz>
  *
@@ -181,11 +181,11 @@ static uint8_t cdc_init(usb_dev *udev, uint8_t config_index)
     usbd_ep_init(udev, EP_BUF_SNG, CDC_BULK_TX_ADDR, &s_in_desc);
     usbd_ep_init(udev, EP_BUF_SNG, CDC_BULK_RX_ADDR, &s_out_desc);
     usbd_ep_init(udev, EP_BUF_SNG, CDC_INT_TX_ADDR, &s_command_desc);
-    dap_diagnostics_cdc_init();
+    DAP_DIAG(cdc_init());
     udev->ep_transc[EP_ID(CDC_IN_EP)][TRANSC_IN] = cdc_data_in;
     udev->ep_transc[EP_ID(CDC_OUT_EP)][TRANSC_OUT] = cdc_data_out;
     arm_receive();
-    dap_diagnostics_ep3_at_init((uint16_t)USBD_EPxCS(EP_ID(CDC_OUT_EP)));
+    DAP_DIAG(ep3_at_init((uint16_t)USBD_EPxCS(EP_ID(CDC_OUT_EP))));
     return USBD_OK;
 }
 
@@ -272,9 +272,9 @@ static void cdc_data_out(usb_dev *udev, uint8_t ep_num)
     }
     s_transport.rx_armed = false;
     length = (uint16_t)udev->transc_out[ep_num].xfer_count;
-    dap_diagnostics_cdc_out(
+    DAP_DIAG(cdc_out(
         (uint16_t)(s_transport.rx_tail - s_transport.rx_head),
-        s_transport.rx_armed);
+        s_transport.rx_armed));
     if (length >
         (CDC_RX_QUEUE_SIZE -
          (uint16_t)(s_transport.rx_tail - s_transport.rx_head))) {
@@ -319,7 +319,7 @@ uint16_t cdc_acm_read(uint8_t *data, uint16_t capacity)
     }
     s_transport.rx_head =
         (uint16_t)(s_transport.rx_head + length);
-    dap_diagnostics_cdc_read(length);
+    DAP_DIAG(cdc_read(length));
     arm_receive();
     return length;
 }
@@ -365,7 +365,7 @@ bool cdc_acm_tx_ready(void)
 
 bool cdc_acm_line_coding_take(acm_line *line)
 {
-    dap_diagnostics_ep3((uint16_t)USBD_EPxCS(EP_ID(CDC_OUT_EP)));
+    DAP_DIAG(ep3((uint16_t)USBD_EPxCS(EP_ID(CDC_OUT_EP))));
     if ((line == NULL) || !s_transport.line_coding_changed) {
         return false;
     }

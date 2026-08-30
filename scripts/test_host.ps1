@@ -163,7 +163,7 @@ $tests = [ordered]@{
     "cdc-transport" = @{
         label = "CDC ACM transport"
         defines = @("GD32F30X_HD")
-        includes = @("firmware/bsp", "firmware/usb")
+        includes = @("firmware/bsp", "firmware/usb", "firmware/app")
         system_includes = @(
             "vendor/GD32_CMSIS",
             "vendor/GD32_CMSIS/GD/GD32F30x/Include",
