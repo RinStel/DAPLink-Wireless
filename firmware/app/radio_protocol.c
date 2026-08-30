@@ -60,7 +60,7 @@ uint8_t radio_protocol_build(uint8_t *frame, radio_frame_type_t type,
 {
     if ((frame == NULL) ||
         (type < RADIO_FRAME_DATA) ||
-        (type > RADIO_FRAME_SWD_BLOCK_RESPONSE) ||
+        (type > RADIO_FRAME_LOOPBACK) ||
         (payload_length > RADIO_PROTOCOL_PAYLOAD_SIZE) ||
         ((payload_length != 0U) && (payload == NULL))) {
         return 0U;
@@ -93,7 +93,7 @@ bool radio_protocol_parse(const uint8_t *frame, uint8_t frame_length,
         (frame[1] != RADIO_PROTOCOL_MAGIC_1) ||
         (frame[2] != RADIO_PROTOCOL_VERSION) ||
         (frame[3] < RADIO_FRAME_DATA) ||
-        (frame[3] > RADIO_FRAME_SWD_BLOCK_RESPONSE) ||
+        (frame[3] > RADIO_FRAME_LOOPBACK) ||
         (decode_u32_be(&frame[4]) != network_id)) {
         return false;
     }

@@ -85,6 +85,11 @@ int main(void)
         payload, sizeof(payload));
     assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
     assert(view.type == RADIO_FRAME_SWD_BLOCK_RESPONSE);
+    length = radio_protocol_build(
+        frame, RADIO_FRAME_LOOPBACK, 0x12345678U, 1U, 12U, payload, 1U);
+    assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
+    assert(view.type == RADIO_FRAME_LOOPBACK);
+    assert(view.payload_length == 1U);
 
     memset(&ack, 0, sizeof(ack));
     ack.ack_next = 0x10203040U;

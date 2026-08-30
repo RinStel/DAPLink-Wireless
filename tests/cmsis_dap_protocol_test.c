@@ -180,6 +180,15 @@ void serial_bridge_swd_cancel(uint8_t transaction_id)
     s_cancelled = true;
 }
 
+static bool s_loopback_enabled;
+static bool s_loopback_result = true;
+
+bool serial_bridge_loopback_set(bool enable)
+{
+    s_loopback_enabled = enable;
+    return s_loopback_result;
+}
+
 bool serial_bridge_swd_cancel_complete(uint8_t transaction_id)
 {
     assert(transaction_id == s_transaction);
@@ -324,6 +333,23 @@ int main(void)
     assert(length == 64U);
     assert(response[0] == DAP_VENDOR_TRACE && response[1] == 1U &&
            response[2] == 0U);
+
+    /* 吞吐基准开关（0x82）：成功与桥接拒绝两种响应。 */
+    request[0] = 0x82U;
+    request[1] = 1U;
+    assert(cmsis_dap_submit(request, 2U));
+    assert(response_take(response) == 2U);
+    assert(response[0] == 0x82U && response[1] == 0U);
+    assert(s_loopback_enabled);
+
+    request[0] = 0x82U;
+    request[1] = 0U;
+    s_loopback_result = false;
+    assert(cmsis_dap_submit(request, 2U));
+    assert(response_take(response) == 2U);
+    assert(response[0] == 0x82U && response[1] == 0xFFU);
+    assert(!s_loopback_enabled);
+    s_loopback_result = true;
 
     request[0] = DAP_INFO;
     request[1] = 0x09U;

@@ -83,6 +83,8 @@ void serial_bridge_swd_cancel(uint8_t transaction_id);
 /* 只有取消完成后才返回 true。 */
 bool serial_bridge_swd_cancel_complete(uint8_t transaction_id);
 bool serial_bridge_swd_response_take(swd_tunnel_response_t *response);
+/* 吞吐基准：控制从机把收到的 DATA 原路回显到 CDC。 */
+bool serial_bridge_loopback_set(bool enable);
 void serial_bridge_status_get(serial_bridge_status_t *status);
 
 #endif

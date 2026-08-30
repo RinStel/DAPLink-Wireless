@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.53 - 2026-08-30
+
+- 新增 CDC 回显吞吐基准（RADIO_FRAME_LOOPBACK 帧 + vendor 0x82 开关 +
+  	ools/radio_throughput_test.py）：从机把收到的 DATA 原路回显，
+  测得的是当前 DATA 窗口架构下的射频往返天花板。
+
 ## 1.0.52 - 2026-08-30
 
 - 诊断构建随 1.0.51/1.0.52 代码同步重新发布，用于测量 64 KiB 烧录时

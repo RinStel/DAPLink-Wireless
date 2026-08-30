@@ -141,6 +141,8 @@ static bool s_swd_abort_pending;
 static bool s_swd_abort_active;
 static uint8_t s_swd_abort_transaction;
 static radio_window_t s_data_tx_window;
+/* 诊断回显：从机为真时把收到的 DATA 原样推回发送窗口（吞吐基准用）。 */
+static bool s_loopback;
 static radio_window_t s_data_rx_window;
 static uint32_t s_data_tx_sequence;
 
@@ -625,7 +627,8 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
         (type != BRIDGE_FRAME_PROFILE_SWITCH) &&
         (type != BRIDGE_FRAME_PROFILE_CONFIRM) &&
         (type != BRIDGE_FRAME_SESSION_START) &&
-        (type != BRIDGE_FRAME_SWD_ABORT)) {
+        (type != BRIDGE_FRAME_SWD_ABORT) &&
+        (type != RADIO_FRAME_LOOPBACK)) {
         return;
     }
 
@@ -655,6 +658,17 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
             }
             while (radio_window_rx_take(&s_data_rx_window, data,
                                         &data_length)) {
+                if (s_loopback &&
+                    (config->device_mode == DEVICE_MODE_WIRELESS_SLAVE)) {
+                    uint32_t echo_sequence;
+
+                    /* 回显模式：跳过 UART，直接推回发送窗口；窗口满时
+                     * 丢弃该段，由测试脚本按流内序号统计丢失。 */
+                    (void)radio_window_tx_push(&s_data_tx_window, data,
+                                               data_length,
+                                               &echo_sequence);
+                    continue;
+                }
                 if (!serial_service_deliver_data(config->device_mode,
                                                  data, data_length)) {
                     return;
@@ -707,6 +721,11 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                     DEVICE_MODE_WIRELESS_SLAVE) &&
                    (length == 1U)) {
             (void)swd_bridge_service_wireless_abort(payload[0]);
+        } else if ((type == RADIO_FRAME_LOOPBACK) &&
+                   (config->device_mode ==
+                    DEVICE_MODE_WIRELESS_SLAVE) &&
+                   (length == 1U)) {
+            s_loopback = payload[0] != 0U;
         } else if ((type == BRIDGE_FRAME_PROFILE_SWITCH) &&
                    (config->device_mode ==
                     DEVICE_MODE_WIRELESS_SLAVE) &&
@@ -1057,6 +1076,7 @@ bool serial_bridge_init(void)
     s_swd_abort_active = false;
     s_session_announce_pending = false;
     s_data_tx_sequence = 1U;
+    s_loopback = false;
     radio_window_init(&s_data_tx_window, s_data_tx_sequence, 1U);
     radio_window_init(&s_data_rx_window, 1U, 1U);
     swd_queue_reset();
@@ -1090,6 +1110,7 @@ bool serial_bridge_apply_config(void)
     s_swd_abort_active = false;
     s_session_announce_pending = false;
     s_data_tx_sequence = 1U;
+    s_loopback = false;
     radio_window_init(&s_data_tx_window, s_data_tx_sequence, 1U);
     radio_window_init(&s_data_rx_window, 1U, 1U);
     swd_queue_reset();
@@ -1479,6 +1500,21 @@ bool serial_bridge_swd_cancel_complete(uint8_t transaction_id)
 {
     return !s_swd_abort_active ||
            (transaction_id != s_swd_abort_transaction);
+}
+
+bool serial_bridge_loopback_set(bool enable)
+{
+    uint8_t payload[1];
+
+    if (device_config_get()->device_mode != DEVICE_MODE_WIRELESS_HOST) {
+        return false;
+    }
+    payload[0] = enable ? 1U : 0U;
+    if (s_pending) {
+        return false;
+    }
+    reliable_queue(RADIO_FRAME_LOOPBACK, payload, 1U);
+    return s_pending;
 }
 
 void serial_bridge_status_get(serial_bridge_status_t *status)

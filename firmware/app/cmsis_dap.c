@@ -48,6 +48,7 @@
 #define DAP_SWD_SEQUENCE          0x1DU
 #define DAP_VENDOR_STATUS         0x80U
 #define DAP_VENDOR_TRACE          0x81U
+#define DAP_VENDOR_LOOPBACK       0x82U
 
 #define DAP_INFO_VENDOR           0x01U
 #define DAP_INFO_PRODUCT          0x02U
@@ -810,6 +811,17 @@ static void dispatch_immediate_slot(dap_slot_t *slot)
         break;
     case DAP_VENDOR_TRACE:
         command_vendor_trace(slot);
+        break;
+    case DAP_VENDOR_LOOPBACK:
+        /* 吞吐基准：控制从机 DATA 回显。请求 [0x82, 0/1]。 */
+        s_response[0] = command;
+        if ((s_request_length < 2U) ||
+            !serial_bridge_loopback_set(s_request[1] != 0U)) {
+            s_response[1] = DAP_ERROR;
+        } else {
+            s_response[1] = DAP_OK;
+        }
+        slot_complete(slot, 2U);
         break;
     case DAP_TRANSFER_ABORT:
         cmsis_dap_abort();

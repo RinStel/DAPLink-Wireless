@@ -1,4 +1,4 @@
-﻿/*
+/*
  * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
  * Copyright (C) 2025 RinStel <me@rinx.nz>
  *
@@ -46,8 +46,9 @@ typedef enum {
     RADIO_FRAME_SESSION_START,
     RADIO_FRAME_SWD_ABORT,
     RADIO_FRAME_SWD_BLOCK,
-    RADIO_FRAME_SWD_BLOCK_RESPONSE
-} radio_frame_type_t;
+    RADIO_FRAME_SWD_BLOCK_RESPONSE,
+    /* 诊断用：从机回显开关（1 字节开关量）。旧固件按未知类型静默丢弃。 */
+    RADIO_FRAME_LOOPBACK} radio_frame_type_t;
 
 typedef struct {
     uint32_t ack_next;

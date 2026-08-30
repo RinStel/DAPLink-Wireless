@@ -39,6 +39,13 @@ typedef struct {
     uint32_t request_depth_sum;
     uint32_t request_depth_samples;
     uint32_t request_depth_max;
+    uint32_t cdc_init_count;
+    uint32_t cdc_out_count;
+    uint32_t cdc_last_used;
+    uint32_t cdc_last_armed;
+    uint32_t cdc_read_count;
+    uint32_t ep3_at_init;
+    uint32_t ep3_last;
     uint32_t tx_done_at;
     uint32_t request_ack_at;
     uint32_t response_at;
@@ -129,6 +136,35 @@ void dap_diagnostics_usb_in_complete(void)
     }
 }
 
+void dap_diagnostics_cdc_init(void)
+{
+    ++s_stats.cdc_init_count;
+}
+
+void dap_diagnostics_cdc_out(uint16_t used, bool armed)
+{
+    ++s_stats.cdc_out_count;
+    s_stats.cdc_last_used = used;
+    s_stats.cdc_last_armed = armed ? 1U : 0U;
+}
+
+void dap_diagnostics_cdc_read(uint16_t length)
+{
+    if (length != 0U) {
+        ++s_stats.cdc_read_count;
+    }
+}
+
+void dap_diagnostics_ep3(uint16_t value)
+{
+    s_stats.ep3_last = value;
+}
+
+void dap_diagnostics_ep3_at_init(uint16_t value)
+{
+    s_stats.ep3_at_init = value;
+}
+
 void dap_diagnostics_request_ring_depth(uint8_t depth)
 {
     if (UINT32_MAX - s_stats.request_depth_sum < depth)
@@ -166,6 +202,13 @@ uint8_t dap_diagnostics_page(uint8_t page, uint8_t *output, uint8_t capacity)
         values[3] = s_stats.request_depth_max;
         values[4] = s_stats.request_depth_sum;
         values[5] = s_stats.request_depth_samples;
+        values[6] = s_stats.cdc_init_count;
+        values[7] = s_stats.cdc_out_count;
+        values[8] = s_stats.cdc_last_used;
+        values[9] = s_stats.cdc_last_armed;
+        values[10] = s_stats.cdc_read_count;
+        values[11] = s_stats.ep3_at_init;
+        values[12] = s_stats.ep3_last;
     }
     for (i = 0U; i < 15U; ++i) put_u32(&output[i * 4U], values[i]);
     return 60U;

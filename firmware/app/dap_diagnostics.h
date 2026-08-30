@@ -15,6 +15,11 @@ uint8_t dap_diagnostics_page(uint8_t page, uint8_t *output,
 void dap_diagnostics_usb_out(const uint8_t *request, uint8_t length);
 void dap_diagnostics_usb_in_complete(void);
 void dap_diagnostics_request_ring_depth(uint8_t depth);
+void dap_diagnostics_cdc_init(void);
+void dap_diagnostics_cdc_out(uint16_t used, bool armed);
+void dap_diagnostics_cdc_read(uint16_t length);
+void dap_diagnostics_ep3(uint16_t value);
+void dap_diagnostics_ep3_at_init(uint16_t value);
 void dap_diagnostics_rf_tx_start(uint8_t frame_length, bool retransmit);
 void dap_diagnostics_rf_tx_done(void);
 void dap_diagnostics_request_ack(void);
