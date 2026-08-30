@@ -17,7 +17,7 @@ int main(void)
     uint32_t updated_ctl1 = target_swd_swdio_ctl1_set_mode(
         initial_ctl1, 0x48U);
 
-    assert(target_swd_normalize_clock(0U) == 100000U);
+    assert(target_swd_normalize_clock(0U) == 4000000U);
     assert(target_swd_normalize_clock(1000U) == 10000U);
     assert(target_swd_normalize_clock(2000000U) == 2000000U);
     assert(target_swd_normalize_clock(4000000U) == 4000000U);

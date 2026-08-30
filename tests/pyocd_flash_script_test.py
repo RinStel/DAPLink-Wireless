@@ -24,7 +24,8 @@ class PyOcdFlashScriptTest(unittest.TestCase):
         return subprocess.run(
             [powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(SCRIPT), *arguments],
-            cwd=ROOT, capture_output=True, text=True, check=False)
+            cwd=ROOT, capture_output=True, text=True, check=False,
+            encoding="utf-8", errors="replace")
 
     def test_script_declares_safe_pyocd_options(self):
         script = SCRIPT.read_text(encoding="utf-8")

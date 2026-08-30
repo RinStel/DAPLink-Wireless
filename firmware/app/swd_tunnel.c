@@ -1,4 +1,4 @@
-﻿/*
+/*
  * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
  * Copyright (C) 2025 RinStel <me@rinx.nz>
  *
@@ -509,143 +509,6 @@ bool swd_tunnel_block_encoded_lengths(const swd_tunnel_block_t *block,
     return true;
 }
 
-uint8_t swd_tunnel_burst_encode(const swd_tunnel_burst_t *burst,
-                                uint8_t *payload)
-{
-    uint8_t index;
-    uint16_t offset = 3U;
-
-    if ((burst == NULL) || (payload == NULL) || (burst->count < 2U) ||
-        (burst->count > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
-        return 0U;
-    }
-    payload[0] = SWD_TUNNEL_OP_BURST;
-    payload[1] = burst->transaction_id;
-    payload[2] = burst->count;
-    for (index = 0U; index < burst->count; ++index) {
-        uint8_t request_length;
-        uint8_t response_length;
-
-        if (!swd_tunnel_block_encoded_lengths(
-                &burst->blocks[index], &request_length, &response_length) ||
-            ((uint16_t)(offset + 1U + request_length) >
-             SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
-            return 0U;
-        }
-        payload[offset++] = request_length;
-        if (swd_tunnel_encode_block(
-                burst->blocks[index].transaction_id,
-                burst->blocks[index].transfers,
-                burst->blocks[index].count, &payload[offset]) !=
-            request_length) {
-            return 0U;
-        }
-        offset = (uint16_t)(offset + request_length);
-    }
-    return (uint8_t)offset;
-}
-
-bool swd_tunnel_burst_decode(const uint8_t *payload, uint8_t length,
-                             swd_tunnel_burst_t *burst)
-{
-    uint8_t index;
-    uint16_t offset = 3U;
-
-    if ((payload == NULL) || (burst == NULL) || (length < 3U) ||
-        (payload[0] != SWD_TUNNEL_OP_BURST) || (payload[2] < 2U) ||
-        (payload[2] > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
-        return false;
-    }
-    burst->transaction_id = payload[1];
-    burst->count = payload[2];
-    for (index = 0U; index < burst->count; ++index) {
-        uint8_t block_length;
-
-        if (offset >= length) {
-            return false;
-        }
-        block_length = payload[offset++];
-        if ((block_length == 0U) ||
-            ((uint16_t)(offset + block_length) > length) ||
-            !swd_tunnel_decode_block(&payload[offset], block_length,
-                                     &burst->blocks[index])) {
-            return false;
-        }
-        offset = (uint16_t)(offset + block_length);
-    }
-    return offset == length;
-}
-
-uint8_t swd_tunnel_burst_response_encode(
-    const swd_tunnel_burst_response_t *response, uint8_t *payload)
-{
-    uint8_t index;
-    uint16_t offset = 3U;
-
-    if ((response == NULL) || (payload == NULL) ||
-        (response->count < 2U) ||
-        (response->count > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
-        return 0U;
-    }
-    payload[0] = SWD_TUNNEL_OP_BURST;
-    payload[1] = response->transaction_id;
-    payload[2] = response->count;
-    for (index = 0U; index < response->count; ++index) {
-        const swd_tunnel_block_response_t *block =
-            &response->responses[index];
-        uint16_t block_length =
-            (uint16_t)(4U + (uint16_t)block->read_count * 4U);
-
-        if ((block_length > UINT8_MAX) ||
-            ((uint16_t)(offset + 1U + block_length) >
-             SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
-            return 0U;
-        }
-        payload[offset++] = (uint8_t)block_length;
-        if (swd_tunnel_encode_block_response(
-                block->transaction_id, block->completed, block->ack,
-                block->data, block->read_count, &payload[offset]) !=
-            block_length) {
-            return 0U;
-        }
-        offset = (uint16_t)(offset + block_length);
-    }
-    return (uint8_t)offset;
-}
-
-bool swd_tunnel_burst_response_decode(
-    const uint8_t *payload, uint8_t length,
-    swd_tunnel_burst_response_t *response)
-{
-    uint8_t index;
-    uint16_t offset = 3U;
-
-    if ((payload == NULL) || (response == NULL) || (length < 3U) ||
-        (payload[0] != SWD_TUNNEL_OP_BURST) || (payload[2] < 2U) ||
-        (payload[2] > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
-        return false;
-    }
-    response->transaction_id = payload[1];
-    response->count = payload[2];
-    for (index = 0U; index < response->count; ++index) {
-        uint8_t block_length;
-
-        if (offset >= length) {
-            return false;
-        }
-        block_length = payload[offset++];
-        if ((block_length == 0U) ||
-            ((uint16_t)(offset + block_length) > length) ||
-            !swd_tunnel_decode_block_response(
-                &payload[offset], block_length,
-                &response->responses[index])) {
-            return false;
-        }
-        offset = (uint16_t)(offset + block_length);
-    }
-    return offset == length;
-}
-
 static bool execute_immediate(const uint8_t *request,
                               uint8_t request_length,
                               uint8_t *response,
@@ -668,7 +531,7 @@ static bool execute_immediate(const uint8_t *request,
         if (request_length != 2U) {
             return false;
         }
-        target_swd_init(100000U);
+        target_swd_init(TARGET_SWD_DEFAULT_CLOCK_HZ);
     } else if (operation == SWD_TUNNEL_OP_DISCONNECT) {
         if (request_length != 2U) {
             return false;
@@ -944,8 +807,12 @@ static bool transfer_async_step(void)
                 &s_response[SWD_TUNNEL_RESPONSE_HEADER_SIZE +
                             s_transfer_index * 4U],
                 s_transfer_data);
+            /* Arm DAP.c 不做逐写 RDBUFF 检查：写数据相的错误由下一个事务
+             * 的 WAIT/FAULT 暴露并由 retry_count 处理。只在块尾做一次检查，
+             * 确保响应发出时整个块已落定；逐写检查会使写块事务数翻倍。 */
             s_transfer_check_write =
-                (request & SWD_TRANSFER_RNW) == 0U;
+                ((request & SWD_TRANSFER_RNW) == 0U) &&
+                ((uint8_t)(s_transfer_index + 1U) == s_transfer_count);
         }
         ++s_transfer_index;
         ++s_transfer_completed;

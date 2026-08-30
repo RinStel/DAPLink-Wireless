@@ -39,9 +39,6 @@ static uint32_t mix32(uint32_t value)
 void frequency_hopping_init(frequency_hopping_t *state,
                             uint32_t network_id)
 {
-    if (state == NULL) {
-        return;
-    }
     state->seed = mix32(network_id ^ 0x484F5053U);
     memset(state->penalty, 0, sizeof(state->penalty));
     state->decay_counter = 0U;
@@ -50,9 +47,6 @@ void frequency_hopping_init(frequency_hopping_t *state,
 uint8_t frequency_hopping_rendezvous(
     const frequency_hopping_t *state)
 {
-    if (state == NULL) {
-        return 0U;
-    }
     return (uint8_t)(state->seed &
                      (FREQUENCY_HOPPING_CHANNEL_COUNT - 1U));
 }
@@ -66,9 +60,6 @@ uint8_t frequency_hopping_select(const frequency_hopping_t *state,
     uint8_t start;
     uint8_t stride;
 
-    if (state == NULL) {
-        return 0U;
-    }
     start = (uint8_t)(mix32(state->seed ^ token) &
                       (FREQUENCY_HOPPING_CHANNEL_COUNT - 1U));
     stride = (uint8_t)(((state->seed >> 8) | 1U) &
@@ -116,8 +107,7 @@ void frequency_hopping_record_success(frequency_hopping_t *state,
 {
     uint8_t index;
 
-    if ((state == NULL) ||
-        !frequency_hopping_channel_valid(channel)) {
+    if (!frequency_hopping_channel_valid(channel)) {
         return;
     }
     if (state->penalty[channel] != 0U) {
@@ -138,8 +128,7 @@ void frequency_hopping_record_success(frequency_hopping_t *state,
 void frequency_hopping_record_failure(frequency_hopping_t *state,
                                       uint8_t channel)
 {
-    if ((state != NULL) &&
-        frequency_hopping_channel_valid(channel) &&
+    if (frequency_hopping_channel_valid(channel) &&
         (state->penalty[channel] != UINT8_MAX)) {
         ++state->penalty[channel];
     }

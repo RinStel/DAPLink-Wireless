@@ -1,4 +1,4 @@
-﻿/*
+/*
  * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
  * Copyright (C) 2025 RinStel <me@rinx.nz>
  *
@@ -20,11 +20,11 @@
 
 #define FIRMWARE_VERSION_MAJOR 1U
 #define FIRMWARE_VERSION_MINOR 0U
-#define FIRMWARE_VERSION_PATCH 44U
+#define FIRMWARE_VERSION_PATCH 52U
 
-#define FIRMWARE_VERSION_STRING "1.0.44"
-#define FIRMWARE_USB_BCD_DEVICE  0x0144U
+#define FIRMWARE_VERSION_STRING "1.0.52"
+#define FIRMWARE_USB_BCD_DEVICE  0x014CU
 /* Numeric ordering used by the bootloader; the display string is not parsed. */
-#define FIRMWARE_VERSION_CODE    1044U
+#define FIRMWARE_VERSION_CODE    1052U
 
 #endif

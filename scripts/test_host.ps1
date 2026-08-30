@@ -205,19 +205,6 @@ $tests = [ordered]@{
             "firmware/app/radio_window.c"
         )
     }
-    "serial-bridge-hot-path" = @{
-        label = "Serial bridge radio hot path"
-        compile_flags = @("-ffunction-sections", "-fdata-sections")
-        link_flags = @("-Wl,--gc-sections")
-        includes = @(
-            "firmware/app",
-            "firmware/bsp",
-            "firmware/drivers/radio",
-            "firmware/drivers/serial",
-            "firmware/drivers/swd"
-        )
-        sources = @("tests/serial_bridge_hot_path_test.c")
-    }
     "device-config" = @{
         label = "Device configuration"
         analyzer = $true

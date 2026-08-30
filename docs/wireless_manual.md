@@ -1,4 +1,4 @@
-# 无线手册：协议 v4、SWD Burst、跳频与射频验证
+# 无线手册：协议 v4、SWD 流水线、跳频与射频验证
 
 ## 当前版本与兼容边界
 
@@ -74,36 +74,6 @@ SPI 事务；AUTO profile 仍读取 RSSI、错误状态和同步状态，用于�
 21 个普通 transfer，响应只携带已完成读传输的数据，并保持读顺序。无线主机将
 响应映射回 CMSIS-DAP 的原始传输顺序。
 
-## SWD_BURST
-
-无线主机仅聚合 USB 请求环中已经到达的 `DAP_Transfer (0x05)` 和
-`DAP_TransferBlock (0x06)`。可聚合前缀少于 2 个时立即使用 `SWD_BLOCK`；
-实现不等待新请求，也不使用 flush 定时器。其他 CMSIS-DAP 命令均为 Burst 边界。
-
-Burst 最多包含 3 个独立子块。请求和响应都使用以下格式：
-
-```text
-operation | burst_transaction_id | count |
-repeated { encoded_length | encoded_block }
-```
-
-`operation` 为 `SWD_TUNNEL_OP_BURST`。每个 `encoded_block` 保留自己的
-transaction ID、Transfer Request、写数据、完成数量、目标 ACK 和读数据。
-请求总长和最坏响应总长都不得超过 110 字节。
-
-无线从机依次调用现有 SWD block 执行器。每个子块分别完成 AP posted-read、
-`DP_RDBUFF`、写后检查、WAIT 重试和错误计数；实现不得把多个 Transfer 数组拼成
-一个 block。全部子块完成后，从机发送一个 `SWD_BURST_RESPONSE`。无线主机按子块
-顺序恢复多个 CMSIS-DAP USB IN 响应。
-
-重复 Burst 请求使用现有可靠响应缓存，不再次执行目标写操作。Abort 取消当前
-子块并丢弃尚未执行的子块；从机返回带错误 ACK 的 Burst 响应。发送前容量不足时
-回退到第一条单发；已发送后的解析错误或超时只生成对应 DAP Transfer 错误，不盲目
-重放整个 Burst。
-
-发送端仅在 `PROFILE=AUTO` 时将 ACK RSSI 输入 EWMA 和速率决策。固定
-`PROFILE` 模式只记录指标，不改变 profile。
-
 ## USB 到目标 SWD 的完整链路
 
 以下链路适用于无线主机。无线从机的 USB 只暴露 MSC 配置盘，不直接接收
@@ -116,21 +86,27 @@ CMSIS-DAP 命令。
 2. `cmsis_dap_usb.c` 将包写入请求环。请求环包含 6 个物理槽并保留一个空槽；
    对外公布的流水线深度为 4。`DAP_TransferAbort` 在 USB OUT 回调中直接设置
    取消标志，不等待普通请求出队。
-3. `cmsis_dap_usb_process()` 只在 CMSIS-DAP 命令核心空闲时提交下一请求。
-   USB 可以提前排队，但 `cmsis_dap.c` 同时只推进一个活动命令，以保持响应顺序。
+3. `cmsis_dap_usb_process()` 持续把 USB 请求环中的命令提交给 CMSIS-DAP 核心。
+   核心维护 4 槽命令流水线：`DAP_Transfer`/`DAP_TransferBlock`/`DAP_WriteAbort`
+   最多 4 个同时在途；控制命令（Connect/Clock/Configure 等）作为屏障，仅在
+   无在途事务时推进；响应严格按命令顺序写回 USB 响应环。
 4. `DAP_Info` 和 `DAP Vendor 0x80` 在无线主机本地生成响应。连接、时钟、引脚、
    SWJ/SWD Sequence 和 Transfer 命令进入 `serial_bridge`。
-5. 普通控制命令编码为可靠的 `SWD_COMMAND`；单个 Transfer 命令编码为压缩的
-   `SWD_BLOCK`；请求环中已有 2 至 3 个可聚合命令时编码为 `SWD_BURST`。
-   请求区先排列 Transfer Request，再按顺序排列写请求和 Match Value 读请求
-   携带的 4 字节数据。每个无线帧添加 17 字节 v4 帧头、会话 ID 和序号。
-6. `serial_bridge` 同时只保留一个可靠控制事务。SX1281 在当前固定 profile 和
-   频道发送该帧；FLRC1M3 使用 1.3 Mbps、CR 3/4。
+5. SWD 请求（控制命令 `SWD_COMMAND` 与块传输 `SWD_BLOCK`）进入主机侧 4 槽
+   SWD 请求队列；块编码先排列 Transfer Request，再按顺序排列写请求和
+   Match Value 读请求携带的 4 字节数据。每个无线帧添加 17 字节 v4 帧头、
+   会话 ID 和序号。
+6. 射频层采用交替模式：同一时刻只有一个 SWD 请求在途，收到该事务的响应后
+   才发射队头的下一个请求。控制帧（SESSION_START、PROFILE_SWITCH、
+   SWD_ABORT 等）仍走单槽可靠路径并等待 ACK；FLRC1M3 使用 1.3 Mbps、CR 3/4。
 7. 无线从机读取 RX FIFO、验证 CRC、同步字、网络 ID、会话、长度和重复帧键，
-   再把 SWD 请求交给唯一的 `swd_bridge_service` 所有者。
-8. 从机用旧频道和旧 profile 发送请求 ACK。该 ACK 只确认无线请求已到达，
-   不表示目标 SWD 已执行完成；固定 profile 下它使用 8 字节紧凑布局。
-9. ACK 的 `TX_DONE` 完成后，从机恢复 RX，再由 `swd_tunnel` 执行目标 SWD。
+   再把 SWD 请求交给唯一的 `swd_bridge_service` 所有者。重复请求只重发缓存的
+   响应，不重复执行目标写操作。
+8. SWD 请求不发送独立请求 ACK；该事务的端到端响应即确认。请求丢失时主机以指数退避重传同一帧（12/24/48/96/192/384/768 ms）。从机在
+   擦除或 flash 算法轮询期间的长时间执行属于合法行为，不触发链路失败；
+   事务上限由 CMSIS-DAP 的 4 s 命令超时兜底。
+9. 从机执行目标 SWD 后发送 `SWD_COMMAND_RESPONSE` / `SWD_BLOCK_RESPONSE`；
+   主机以下一条请求作为上一响应的隐式确认，显式响应 ACK 仅在空闲边界发送。
    无线从机每轮主循环最多使用 1600 µs 批处理预算；长 block 分轮执行，并保留
    WAIT、2500 ms 总预算和 Abort 检查。
 
@@ -139,25 +115,22 @@ CMSIS-DAP 命令。
 1. 从机把目标 ACK、完成数量和读数据编码为 `SWD_BLOCK_RESPONSE`，并按可靠帧
    发送。该完整响应确认目标事务完成。重复的相同请求不会再次执行目标 SWD；
    从机重发缓存响应。
-2. 无线主机收到响应后检查会话和 transaction ID，将结果交回
-   `swd_bridge_service`，并发送响应 ACK。
-   CMSIS-DAP 核心同时只推进一个命令，因此从机收到下一条 SWD 请求时，也可将其
-   作为上一响应已到达主机的隐式确认；显式响应 ACK 丢失不会再占用旧响应槽直至
-   120 ms 级重试超时。
-3. `cmsis_dap_process()` 将无线结果恢复为原 CMSIS-DAP 响应。多于一个内部
-   chunk 的 Transfer 继续提交下一 chunk；全部完成后才结束该 USB 命令。
+2. 无线主机收到响应后检查会话和 transaction ID，按序交付 `swd_bridge_service`
+   的响应 FIFO，并发送响应 ACK。主机已有后续 SWD 请求排队时，下一请求同时
+   构成隐式确认；显式响应 ACK 丢失不会阻塞后续事务。
+3. `cmsis_dap_process()` 将无线结果恢复为原 CMSIS-DAP 响应；流水线中每个
+   在途命令对应一个槽位，响应按命令顺序写回。
 4. `cmsis_dap_usb.c` 将响应写入响应环，再通过 `EP5 IN (0x85)` 按请求顺序发送。
 
 ```text
 Keil/pyOCD   USB主机DAP       FLRC主机       FLRC从机       目标MCU
     | EP5 OUT    |                |              |              |
-    |----------->| SWD_BLOCK      |              |              |
-    |            |--------------->|----请求----->|              |
-    |            |                |<----ACK------|              |
+    |----------->| SWD_BLOCK ×N   |              |              |
+    |            | (流水线，N≤4)  |---请求 N---->|              |
     |            |                |              |----SWD------>|
-    |            |                |              |<---ACK/数据--|
-    |            |                |<---响应-------|              |
-    |            |                |----ACK------->|              |
+    |            |                |              |<---数据------|
+    |            |                |<---响应 N----|              |
+    |            |                |--请求 N+1--->| (隐式确认 N) |
     |<-----------| EP5 IN         |              |              |
 ```
 

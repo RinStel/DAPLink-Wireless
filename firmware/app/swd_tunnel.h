@@ -25,7 +25,6 @@
 #define SWD_TUNNEL_MAX_PAYLOAD   110U
 #define SWD_TUNNEL_MAX_BLOCK_TRANSFERS 21U
 #define SWD_TUNNEL_MAX_BLOCK_PAYLOAD   110U
-#define SWD_TUNNEL_BURST_MAX_BLOCKS    3U
 
 typedef enum {
     SWD_TUNNEL_OP_CONNECT = 1,
@@ -36,8 +35,7 @@ typedef enum {
     SWD_TUNNEL_OP_DISCONNECT,
     SWD_TUNNEL_OP_CONFIGURE,
     SWD_TUNNEL_OP_PINS,
-    SWD_TUNNEL_OP_SWD_SEQUENCE,
-    SWD_TUNNEL_OP_BURST
+    SWD_TUNNEL_OP_SWD_SEQUENCE
 } swd_tunnel_operation_t;
 
 typedef struct {
@@ -58,18 +56,6 @@ typedef struct {
     uint8_t read_count;
     uint32_t data[SWD_TUNNEL_MAX_BLOCK_TRANSFERS];
 } swd_tunnel_block_response_t;
-
-typedef struct {
-    uint8_t transaction_id;
-    uint8_t count;
-    swd_tunnel_block_t blocks[SWD_TUNNEL_BURST_MAX_BLOCKS];
-} swd_tunnel_burst_t;
-
-typedef struct {
-    uint8_t transaction_id;
-    uint8_t count;
-    swd_tunnel_block_response_t responses[SWD_TUNNEL_BURST_MAX_BLOCKS];
-} swd_tunnel_burst_response_t;
 
 typedef struct {
     uint8_t operation;
@@ -120,15 +106,6 @@ bool swd_tunnel_decode_block_response(
 bool swd_tunnel_block_encoded_lengths(const swd_tunnel_block_t *block,
                                       uint8_t *request_length,
                                       uint8_t *worst_response_length);
-uint8_t swd_tunnel_burst_encode(const swd_tunnel_burst_t *burst,
-                                uint8_t *payload);
-bool swd_tunnel_burst_decode(const uint8_t *payload, uint8_t length,
-                             swd_tunnel_burst_t *burst);
-uint8_t swd_tunnel_burst_response_encode(
-    const swd_tunnel_burst_response_t *response, uint8_t *payload);
-bool swd_tunnel_burst_response_decode(
-    const uint8_t *payload, uint8_t length,
-    swd_tunnel_burst_response_t *response);
 /* submit 会复制请求；同时只能有一个活动请求。 */
 bool swd_tunnel_submit(const uint8_t *request, uint8_t request_length);
 /* 有线和无线都直接提交压缩 block。 */

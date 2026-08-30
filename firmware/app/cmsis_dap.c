@@ -1,4 +1,4 @@
-﻿/*
+/*
  * DAPLink-Wireless — Wireless CMSIS-DAP v2 debug probe firmware
  * Copyright (C) 2025 RinStel <me@rinx.nz>
  *
@@ -26,8 +26,10 @@
 #include "serial_bridge.h"
 #include "target_swd.h"
 
-/* 命令核心仅在主循环中运行。USB 可以排队，但本模块一次只推进一个
- * 异步 SWD 事务。 */
+/* 命令核心以 4 槽 FIFO 流水推进：SWD Transfer/Block 命令在无线链路上
+ * 最多 4 个在途；控制命令（Connect/Clock/Configure 等）作为屏障，仅在
+ * 无在途事务时推进；Immediate 命令在提交时同步完成。响应严格按命令
+ * 顺序交付 USB。USB 回调只提交或复制数据。 */
 #define DAP_INFO                  0x00U
 #define DAP_HOST_STATUS           0x01U
 #define DAP_CONNECT               0x02U
@@ -69,40 +71,44 @@
 #define DAP_TRANSFER_UNSUPPORTED  DAP_TRANSFER_TIMESTAMP
 #define DAP_OPERATION_TIMEOUT_MS  4000U
 #define DAP_MAX_TRANSFERS         16U
+#define DAP_COMMAND_QUEUE_SIZE    CMSIS_DAP_PACKET_COUNT
 #define DAP_VENDOR_STATUS_VERSION 5U
 #ifndef CMSIS_DAP_ADVERTISE_ATOMIC_COMMANDS
 #define CMSIS_DAP_ADVERTISE_ATOMIC_COMMANDS 0
 #endif
 
 typedef enum {
-    DAP_STATE_IDLE = 0,
-    DAP_STATE_CONNECT,
-    DAP_STATE_TRANSFER,
-    DAP_STATE_RESET,
-    DAP_STATE_COMMAND,
-    DAP_STATE_PINS,
-    DAP_STATE_SWD_SEQUENCE,
-    DAP_STATE_DELAY,
-    DAP_STATE_BURST
-} dap_state_t;
+    SLOT_KIND_IMMEDIATE = 0,
+    SLOT_KIND_TRANSFER,
+    SLOT_KIND_CONTROL,
+    SLOT_KIND_DELAY
+} dap_slot_kind_t;
 
-static uint8_t s_request[CMSIS_DAP_PACKET_SIZE];
-static uint8_t s_response[CMSIS_DAP_PACKET_SIZE];
-static swd_tunnel_transfer_t s_transfers[DAP_MAX_TRANSFERS];
-static dap_state_t s_state;
-static uint8_t s_request_length;
-static uint8_t s_response_length;
-static uint8_t s_transfer_count;
-static uint8_t s_transfer_done;
-static uint8_t s_chunk_count;
+typedef struct {
+    uint8_t request[CMSIS_DAP_PACKET_SIZE];
+    uint8_t length;
+    dap_slot_kind_t kind;
+    uint8_t transaction;
+    bool dispatched;
+    bool cancel_waiting;
+    bool transfer_block;
+    bool write_abort;
+    uint8_t transfer_count;
+    /* 每槽独立保存 transfer 表：流水线下多个块同时在途，共享暂存区会被
+     * 后续派发的解析覆盖，导致响应的读数据映射错乱。 */
+    swd_tunnel_transfer_t transfers[DAP_MAX_TRANSFERS];
+    uint8_t response[CMSIS_DAP_PACKET_SIZE];
+    uint8_t response_length;
+    bool response_ready;
+    uint32_t deadline;
+} dap_slot_t;
+
+static dap_slot_t s_slots[DAP_COMMAND_QUEUE_SIZE];
+static uint8_t s_slot_head;
+static uint8_t s_slot_count;
+static uint8_t s_inflight_count;
 static uint8_t s_transaction_id;
-static uint32_t s_deadline;
-static bool s_response_ready;
 static bool s_connected;
-static bool s_transfer_block;
-static bool s_write_abort;
-#define CMSIS_DAP_TUNNEL_CHUNK_MAX 16U
-static bool s_cancel_waiting;
 static uint8_t s_idle_cycles;
 static uint16_t s_retry_count;
 static uint16_t s_match_retry;
@@ -112,32 +118,101 @@ static volatile bool s_abort_requested;
 static uint8_t s_parent_request[CMSIS_DAP_PACKET_SIZE];
 static uint8_t s_parent_response[CMSIS_DAP_PACKET_SIZE];
 static uint8_t s_parent_count;
-static uint8_t s_parent_index;
 static uint8_t s_parent_request_offset;
 static uint8_t s_parent_request_length;
 static uint8_t s_parent_response_offset;
 static bool s_parent_active;
-typedef struct {
-    bool transfer_block;
-    swd_tunnel_block_t block;
-} dap_burst_command_t;
-static dap_burst_command_t s_burst_commands[CMSIS_DAP_BURST_MAX_COMMANDS];
-static uint8_t s_burst_responses[CMSIS_DAP_BURST_MAX_COMMANDS]
-                                [CMSIS_DAP_PACKET_SIZE];
-static uint8_t s_burst_response_lengths[CMSIS_DAP_BURST_MAX_COMMANDS];
-static uint8_t s_burst_response_count;
-static uint8_t s_burst_response_read;
-static uint8_t s_burst_transaction;
-static uint8_t s_burst_command_count;
+static bool s_parent_response_ready;
 
-static void response_finish(uint8_t length);
-static void response_invalid(void);
-static void response_error(uint8_t command);
-static bool parent_start_next(void);
-static void command_dispatch(void);
+static void dispatch_pipelines(void);
 static uint32_t decode_u32_le(const uint8_t *input);
 static void encode_u32_le(uint8_t *output, uint32_t value);
 
+static uint8_t slot_next(uint8_t index)
+{
+    ++index;
+    return index == DAP_COMMAND_QUEUE_SIZE ? 0U : index;
+}
+
+static bool slot_push(const uint8_t *request, uint8_t length)
+{
+    dap_slot_t *slot;
+    uint8_t tail;
+
+    if ((request == NULL) || (length == 0U) ||
+        (length > CMSIS_DAP_PACKET_SIZE) ||
+        (s_slot_count >= DAP_COMMAND_QUEUE_SIZE)) {
+        return false;
+    }
+    tail = (uint8_t)((s_slot_head + s_slot_count) % DAP_COMMAND_QUEUE_SIZE);
+    slot = &s_slots[tail];
+    memset(slot, 0, sizeof(*slot));
+    memcpy(slot->request, request, length);
+    slot->length = length;
+    switch (request[0]) {
+    case DAP_TRANSFER:
+    case DAP_TRANSFER_BLOCK:
+    case DAP_WRITE_ABORT:
+        slot->kind = SLOT_KIND_TRANSFER;
+        break;
+    case DAP_CONNECT:
+    case DAP_DISCONNECT:
+    case DAP_TRANSFER_CONFIGURE:
+    case DAP_RESET_TARGET:
+    case DAP_SWJ_CLOCK:
+    case DAP_SWJ_SEQUENCE:
+    case DAP_SWD_CONFIGURE:
+    case DAP_SWD_SEQUENCE:
+    case DAP_SWJ_PINS:
+        slot->kind = SLOT_KIND_CONTROL;
+        break;
+    case DAP_DELAY:
+        slot->kind = SLOT_KIND_DELAY;
+        break;
+    default:
+        slot->kind = SLOT_KIND_IMMEDIATE;
+        break;
+    }
+    ++s_slot_count;
+    return true;
+}
+
+/* 找到第一个已派发且未完成的槽位；没有则返回 NULL。 */
+static dap_slot_t *outstanding_slot(void)
+{
+    uint8_t index = s_slot_head;
+    uint8_t scanned;
+
+    for (scanned = 0U; scanned < s_slot_count; ++scanned) {
+        dap_slot_t *slot = &s_slots[index];
+
+        if (slot->dispatched && !slot->response_ready) {
+            return slot;
+        }
+        index = slot_next(index);
+    }
+    return NULL;
+}
+
+static void slot_complete(dap_slot_t *slot, uint8_t response_length)
+{
+    slot->response_length = response_length;
+    slot->response_ready = true;
+}
+
+static void slot_transfer_error(dap_slot_t *slot)
+{
+    slot->response[0] = slot->request[0];
+    slot->response[1] = 0U;
+    if (slot->transfer_block) {
+        slot->response[2] = 0U;
+        slot->response[3] = DAP_TRANSFER_ERROR;
+        slot_complete(slot, 4U);
+    } else {
+        slot->response[2] = DAP_TRANSFER_ERROR;
+        slot_complete(slot, 3U);
+    }
+}
 
 static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
 {
@@ -193,214 +268,6 @@ static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
     return true;
 }
 
-bool cmsis_dap_burst_eligible(const uint8_t *request, uint8_t length)
-{
-    uint8_t parsed_length;
-
-    if ((request == NULL) || (length == 0U) ||
-        ((request[0] != DAP_TRANSFER) &&
-         (request[0] != DAP_TRANSFER_BLOCK)) ||
-        !command_length(request, length, &parsed_length)) {
-        return false;
-    }
-    if (request[0] == DAP_TRANSFER) {
-        return (length >= 3U) && (request[2] != 0U);
-    }
-    return (length >= 5U) &&
-           (((uint16_t)request[2] |
-             ((uint16_t)request[3] << 8)) != 0U);
-}
-
-static bool burst_command_parse(const uint8_t *request, uint8_t length,
-                                dap_burst_command_t *command)
-{
-    uint16_t count;
-    uint8_t index;
-    uint8_t offset;
-    uint8_t parsed_length;
-
-    if ((command == NULL) ||
-        !cmsis_dap_burst_eligible(request, length)) {
-        return false;
-    }
-    if (!command_length(request, length, &parsed_length)) {
-        return false;
-    }
-    length = parsed_length;
-    memset(command, 0, sizeof(*command));
-    command->transfer_block = request[0] == DAP_TRANSFER_BLOCK;
-    if (command->transfer_block) {
-        uint8_t transfer_request = request[4] & 0x0FU;
-
-        count = (uint16_t)request[2] |
-                ((uint16_t)request[3] << 8);
-        if ((count > DAP_MAX_TRANSFERS) ||
-            ((request[4] & 0xF0U) != 0U) ||
-            (((transfer_request & DAP_TRANSFER_RNW) != 0U) &&
-             (count > 15U))) {
-            return false;
-        }
-        command->block.count = (uint8_t)count;
-        offset = 5U;
-        for (index = 0U; index < command->block.count; ++index) {
-            command->block.transfers[index].request = transfer_request;
-            if ((transfer_request & DAP_TRANSFER_RNW) == 0U) {
-                command->block.transfers[index].data =
-                    decode_u32_le(&request[offset]);
-                offset = (uint8_t)(offset + 4U);
-            }
-        }
-        return offset == length;
-    }
-
-    command->block.count = request[2];
-    if (command->block.count > DAP_MAX_TRANSFERS) {
-        return false;
-    }
-    offset = 3U;
-    for (index = 0U; index < command->block.count; ++index) {
-        uint8_t transfer_request = request[offset++];
-
-        if ((transfer_request & DAP_TRANSFER_UNSUPPORTED) != 0U ||
-            (((transfer_request & DAP_TRANSFER_MATCH_MASK) != 0U) &&
-             ((transfer_request & DAP_TRANSFER_RNW) != 0U)) ||
-            (((transfer_request & DAP_TRANSFER_MATCH_VALUE) != 0U) &&
-             ((transfer_request & DAP_TRANSFER_RNW) == 0U))) {
-            return false;
-        }
-        command->block.transfers[index].request = transfer_request & 0x3FU;
-        if (((transfer_request & DAP_TRANSFER_RNW) == 0U) ||
-            ((transfer_request & DAP_TRANSFER_MATCH_VALUE) != 0U)) {
-            command->block.transfers[index].data =
-                decode_u32_le(&request[offset]);
-            offset = (uint8_t)(offset + 4U);
-        }
-    }
-    return offset == length;
-}
-
-bool cmsis_dap_submit_burst(const uint8_t *const requests[],
-                            const uint8_t lengths[], uint8_t count)
-{
-    swd_tunnel_burst_t burst;
-    uint16_t request_total = 3U;
-    uint16_t response_total = 3U;
-    uint8_t index;
-
-    if ((requests == NULL) || (lengths == NULL) || !s_connected ||
-        (count < 2U) || (count > CMSIS_DAP_BURST_MAX_COMMANDS) ||
-        (s_state != DAP_STATE_IDLE) || s_response_ready ||
-        (s_burst_response_count != 0U)) {
-        DAP_DIAG(burst_reject_bridge());
-        return false;
-    }
-    memset(&burst, 0, sizeof(burst));
-    burst.count = count;
-    burst.transaction_id = (uint8_t)(s_transaction_id + 1U);
-    for (index = 0U; index < count; ++index) {
-        uint8_t request_length;
-        uint8_t response_length;
-
-        if (!burst_command_parse(requests[index], lengths[index],
-                                 &s_burst_commands[index])) {
-            DAP_DIAG(burst_reject_parse());
-            return false;
-        }
-        s_burst_commands[index].block.transaction_id =
-            (uint8_t)(burst.transaction_id + 1U + index);
-        burst.blocks[index] = s_burst_commands[index].block;
-        if (!swd_tunnel_block_encoded_lengths(
-                &burst.blocks[index], &request_length, &response_length)) {
-            DAP_DIAG(burst_reject_parse());
-            return false;
-        }
-        request_total = (uint16_t)(request_total + 1U + request_length);
-        response_total = (uint16_t)(response_total + 1U + response_length);
-        if ((request_total > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) ||
-            (response_total > SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
-            DAP_DIAG(burst_reject_capacity());
-            return false;
-        }
-    }
-    if (!serial_bridge_swd_burst(&burst)) {
-        DAP_DIAG(burst_reject_bridge());
-        return false;
-    }
-    s_transaction_id = burst.transaction_id;
-    s_burst_transaction = burst.transaction_id;
-    s_burst_command_count = count;
-    s_burst_response_count = 0U;
-    s_burst_response_read = 0U;
-    s_deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
-    s_state = DAP_STATE_BURST;
-    return true;
-}
-
-static bool burst_responses_build(
-    const swd_tunnel_burst_response_t *burst_response)
-{
-    uint8_t command_index;
-
-    if ((burst_response == NULL) ||
-        (burst_response->transaction_id != s_burst_transaction) ||
-        (burst_response->count < 2U) ||
-        (burst_response->count > CMSIS_DAP_BURST_MAX_COMMANDS) ||
-        (burst_response->count != s_burst_command_count)) {
-        return false;
-    }
-    for (command_index = 0U; command_index < burst_response->count;
-         ++command_index) {
-        const dap_burst_command_t *command =
-            &s_burst_commands[command_index];
-        const swd_tunnel_block_response_t *block_response =
-            &burst_response->responses[command_index];
-        uint8_t *output = s_burst_responses[command_index];
-        uint8_t output_length = command->transfer_block ? 4U : 3U;
-        uint8_t transfer_index;
-        uint8_t read_index = 0U;
-
-        if ((block_response->transaction_id !=
-             command->block.transaction_id) ||
-            (block_response->completed > command->block.count)) {
-            return false;
-        }
-        output[0] = command->transfer_block
-                        ? DAP_TRANSFER_BLOCK
-                        : DAP_TRANSFER;
-        output[1] = block_response->completed;
-        if (command->transfer_block) {
-            output[2] = 0U;
-            output[3] = block_response->ack;
-        } else {
-            output[2] = block_response->ack;
-        }
-        for (transfer_index = 0U;
-             transfer_index < block_response->completed;
-             ++transfer_index) {
-            uint8_t transfer_request =
-                command->block.transfers[transfer_index].request;
-
-            if (((transfer_request & DAP_TRANSFER_RNW) != 0U) &&
-                ((transfer_request & DAP_TRANSFER_MATCH_VALUE) == 0U)) {
-                if ((read_index >= block_response->read_count) ||
-                    (output_length > CMSIS_DAP_PACKET_SIZE - 4U)) {
-                    return false;
-                }
-                encode_u32_le(&output[output_length],
-                              block_response->data[read_index++]);
-                output_length = (uint8_t)(output_length + 4U);
-            }
-        }
-        if (read_index != block_response->read_count) {
-            return false;
-        }
-        s_burst_response_lengths[command_index] = output_length;
-    }
-    s_burst_response_count = burst_response->count;
-    s_burst_response_read = 0U;
-    return true;
-}
-
 static uint32_t decode_u32_le(const uint8_t *input)
 {
     return input[0] |
@@ -417,10 +284,11 @@ static void encode_u32_le(uint8_t *output, uint32_t value)
     output[3] = (uint8_t)(value >> 24);
 }
 
-static void command_vendor_status(void)
+static void command_vendor_status(dap_slot_t *slot)
 {
     serial_bridge_status_t status;
     uint8_t flags = 0U;
+    uint8_t *s_response = slot->response;
 
     serial_bridge_status_get(&status);
     if (status.radio_ready) {
@@ -459,109 +327,74 @@ static void command_vendor_status(void)
     encode_u32_le(&s_response[35], status.radio_timeouts);
     encode_u32_le(&s_response[39], status.invalid_radio_frames);
     encode_u32_le(&s_response[43], status.peer_session_changes);
-    response_finish(47U);
+    slot_complete(slot, 47U);
 }
 
-static void command_vendor_trace(void)
+static void command_vendor_trace(dap_slot_t *slot)
 {
 #if CMSIS_DAP_DIAGNOSTICS_ENABLE
+    const uint8_t *s_request = slot->request;
+    uint8_t s_request_length = slot->length;
+    uint8_t *s_response = slot->response;
+
     s_response[0] = DAP_VENDOR_TRACE;
     s_response[1] = 1U;
     if ((s_request_length >= 2U) && (s_request[1] == 0U)) {
         dap_diagnostics_reset();
         s_response[2] = DAP_OK;
-        response_finish(3U);
+        slot_complete(slot, 3U);
     } else if ((s_request_length >= 3U) && (s_request[1] == 1U)) {
         s_response[2] = s_request[2];
         if (dap_diagnostics_page(s_request[2], &s_response[4], 60U) == 60U) {
             s_response[3] = 60U;
-            response_finish(64U);
+            slot_complete(slot, 64U);
         } else {
-            response_error(DAP_VENDOR_TRACE);
+            slot->response[1] = DAP_ERROR;
+            slot_complete(slot, 2U);
         }
     } else {
-        response_error(DAP_VENDOR_TRACE);
+        slot->response[1] = DAP_ERROR;
+        slot_complete(slot, 2U);
     }
 #else
-    response_invalid();
+    (void)slot;
+    slot->response[0] = 0xFFU;
+    slot_complete(slot, 1U);
 #endif
 }
 
-static void response_finish(uint8_t length)
-{
-    if (s_parent_active) {
-        if ((uint16_t)s_parent_response_offset + length > CMSIS_DAP_PACKET_SIZE) {
-            s_parent_active = false; s_response[0] = 0xFFU; s_response_length = 1U; s_response_ready = true; s_state = DAP_STATE_IDLE; return;
-        }
-        memcpy(&s_parent_response[s_parent_response_offset], s_response, length);
-        s_parent_response_offset = (uint8_t)(s_parent_response_offset + length);
-        ++s_parent_index;
-        s_state = DAP_STATE_IDLE;
-        if (s_parent_index == s_parent_count) {
-            s_parent_active = false; memcpy(s_response, s_parent_response, s_parent_response_offset); s_response_length = s_parent_response_offset; s_response_ready = true; return;
-        }
-        if (!parent_start_next()) { s_parent_active = false; s_response[0] = 0xFFU; s_response_length = 1U; s_response_ready = true; }
-        return;
-    }
-    /* response-ready 置位后保持 busy，直到 USB 传输层复制走响应。 */
-    s_response_length = length;
-    s_response_ready = true;
-    s_state = DAP_STATE_IDLE;
-}
-
-static bool parent_start_next(void)
-{
-    uint8_t len;
-    if (s_parent_request_offset >= s_parent_request_length ||
-        !command_length(&s_parent_request[s_parent_request_offset],
-                        (uint8_t)(s_parent_request_length - s_parent_request_offset), &len)) return false;
-    memcpy(s_request, &s_parent_request[s_parent_request_offset], len);
-    s_request_length = len;
-    s_parent_request_offset = (uint8_t)(s_parent_request_offset + len);
-    command_dispatch();
-    return true;
-}
-
-static void response_error(uint8_t command)
-{
-    s_response[0] = command;
-    s_response[1] = DAP_ERROR;
-    response_finish(2U);
-}
-
-static void response_invalid(void)
-{
-    s_response[0] = 0xFFU;
-    response_finish(1U);
-}
-
-static void info_string(const char *text)
+static void info_string(dap_slot_t *slot, const char *text)
 {
     uint8_t length = (uint8_t)strlen(text);
 
     if (length > CMSIS_DAP_PACKET_SIZE - 3U) {
         length = CMSIS_DAP_PACKET_SIZE - 3U;
     }
-    s_response[1] = (uint8_t)(length + 1U);
-    memcpy(&s_response[2], text, length);
-    s_response[2U + length] = '\0';
-    response_finish((uint8_t)(3U + length));
+    slot->response[1] = (uint8_t)(length + 1U);
+    memcpy(&slot->response[2], text, length);
+    slot->response[2U + length] = '\0';
+    slot_complete(slot, (uint8_t)(3U + length));
 }
 
-static void command_info(void)
+static void command_info(dap_slot_t *slot)
 {
+    const uint8_t *s_request = slot->request;
+    uint8_t s_request_length = slot->length;
+    uint8_t *s_response = slot->response;
     uint8_t info_id;
 
     if (s_request_length < 2U) {
-        response_error(DAP_INFO);
+        slot->response[0] = DAP_INFO;
+        slot->response[1] = DAP_ERROR;
+        slot_complete(slot, 2U);
         return;
     }
     s_response[0] = DAP_INFO;
     info_id = s_request[1];
     if (info_id == DAP_INFO_VENDOR) {
-        info_string("RinStel");
+        info_string(slot, "RinStel");
     } else if (info_id == DAP_INFO_PRODUCT) {
-        info_string("CMSIS-DAP");
+        info_string(slot, "CMSIS-DAP");
     } else if (info_id == DAP_INFO_SERIAL) {
         char serial[9];
         static const char digits[] = "0123456789ABCDEF";
@@ -573,11 +406,11 @@ static void command_info(void)
             value >>= 4;
         }
         serial[8] = '\0';
-        info_string(serial);
+        info_string(slot, serial);
     } else if (info_id == DAP_INFO_FW_VERSION) {
-        info_string(CMSIS_DAP_PROTOCOL_VERSION);
+        info_string(slot, CMSIS_DAP_PROTOCOL_VERSION);
     } else if (info_id == DAP_INFO_PRODUCT_FW_VERSION) {
-        info_string(FIRMWARE_VERSION_STRING);
+        info_string(slot, FIRMWARE_VERSION_STRING);
     } else if (info_id == DAP_INFO_CAPABILITIES) {
         s_response[1] = 2U;
         s_response[2] = 0x01U;
@@ -585,601 +418,645 @@ static void command_info(void)
         s_response[2] |= 0x10U;
 #endif
         s_response[3] = 0x01U;
-        response_finish(4U);
+        slot_complete(slot, 4U);
     } else if (info_id == DAP_INFO_PACKET_COUNT) {
         s_response[1] = 1U;
         s_response[2] = CMSIS_DAP_PACKET_COUNT;
-        response_finish(3U);
+        slot_complete(slot, 3U);
     } else if (info_id == DAP_INFO_PACKET_SIZE) {
         s_response[1] = 2U;
         s_response[2] = CMSIS_DAP_PACKET_SIZE;
         s_response[3] = 0U;
-        response_finish(4U);
+        slot_complete(slot, 4U);
     } else {
         s_response[1] = 0U;
-        response_finish(2U);
+        slot_complete(slot, 2U);
     }
 }
 
-static void operation_start(dap_state_t state)
-{
-    s_state = state;
-    s_deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
-}
-
-static void command_connect(void)
-{
-    uint8_t port = s_request_length >= 2U ? s_request[1] : 0U;
-
-    s_response[0] = DAP_CONNECT;
-    if ((port != 0U) && (port != DAP_PORT_SWD)) {
-        s_response[1] = DAP_PORT_DISABLED;
-        response_finish(2U);
-        return;
-    }
-    if (!serial_bridge_swd_connect(++s_transaction_id)) {
-        s_response[1] = DAP_PORT_DISABLED;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_CONNECT);
-}
-
-static void command_disconnect(void)
-{
-    s_response[0] = DAP_DISCONNECT;
-    s_connected = false;
-    if (!serial_bridge_swd_disconnect(++s_transaction_id)) {
-        s_response[1] = DAP_OK;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_COMMAND);
-}
-
-static void command_transfer_configure(void)
-{
-    if (s_request_length < 6U) {
-        response_error(DAP_TRANSFER_CONFIGURE);
-        return;
-    }
-    s_idle_cycles = s_request[1];
-    s_retry_count = (uint16_t)s_request[2] |
-                    ((uint16_t)s_request[3] << 8);
-    s_match_retry = (uint16_t)s_request[4] |
-                    ((uint16_t)s_request[5] << 8);
-    s_response[0] = DAP_TRANSFER_CONFIGURE;
-    if (!serial_bridge_swd_configure(
-            ++s_transaction_id, s_idle_cycles, s_retry_count,
-            s_match_retry,
-            s_turnaround, s_data_phase)) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_COMMAND);
-}
-
-static void command_swd_configure(void)
-{
-    uint8_t value;
-
-    if (s_request_length < 2U) {
-        response_error(DAP_SWD_CONFIGURE);
-        return;
-    }
-    value = s_request[1];
-    s_turnaround = (uint8_t)((value & 0x03U) + 1U);
-    s_data_phase = (value & 0x04U) != 0U;
-    s_response[0] = DAP_SWD_CONFIGURE;
-    if (!serial_bridge_swd_configure(
-            ++s_transaction_id, s_idle_cycles, s_retry_count,
-            s_match_retry,
-            s_turnaround, s_data_phase)) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_COMMAND);
-}
-
-static bool transfer_parse(void)
+/* 解析可变长度的 DAP_Transfer / DAP_TransferBlock 到所属槽位的表。 */
+static bool transfer_parse(const uint8_t *request, uint8_t request_length,
+                           uint8_t *count_out,
+                           swd_tunnel_transfer_t *transfers)
 {
     uint8_t count;
     uint8_t input_offset = 3U;
     uint8_t index;
     uint8_t read_count = 0U;
 
-    /* 先解析可变长度的 DAP_Transfer，再提交 SWD 工作；限制读数据数量，
-     * 确保响应仍能放入一个 USB 包。 */
-    if (s_request_length < 3U) {
+    if (request_length < 3U) {
         return false;
     }
-    count = s_request[2];
-    if (count > DAP_MAX_TRANSFERS) {
-        return false;
-    }
-    if (count == 0U) {
-        s_transfer_count = 0U;
-        s_transfer_done = 0U;
-        s_transfer_block = false;
-        s_write_abort = false;
-        s_response[0] = DAP_TRANSFER;
-        s_response[1] = 0U;
-        s_response[2] = 0U;
-        s_response_length = 3U;
-        return true;
-    }
-    if (count > DAP_MAX_TRANSFERS) {
-        return false;
+    count = request[2];
+    if ((count == 0U) || (count > DAP_MAX_TRANSFERS)) {
+        *count_out = 0U;
+        return count == 0U;
     }
     for (index = 0U; index < count; ++index) {
-        uint8_t request;
+        uint8_t transfer_request;
 
-        if (input_offset >= s_request_length) {
+        if (input_offset >= request_length) {
             return false;
         }
-        request = s_request[input_offset++];
-        if ((request & DAP_TRANSFER_UNSUPPORTED) != 0U) {
+        transfer_request = request[input_offset++];
+        if ((transfer_request & DAP_TRANSFER_UNSUPPORTED) != 0U) {
             return false;
         }
-        if ((((request & DAP_TRANSFER_MATCH_MASK) != 0U) &&
-             ((request & DAP_TRANSFER_RNW) != 0U)) ||
-            (((request & DAP_TRANSFER_MATCH_VALUE) != 0U) &&
-             ((request & DAP_TRANSFER_RNW) == 0U))) {
+        if ((((transfer_request & DAP_TRANSFER_MATCH_MASK) != 0U) &&
+             ((transfer_request & DAP_TRANSFER_RNW) != 0U)) ||
+            (((transfer_request & DAP_TRANSFER_MATCH_VALUE) != 0U) &&
+             ((transfer_request & DAP_TRANSFER_RNW) == 0U))) {
             return false;
         }
-        s_transfers[index].request = request & 0x3FU;
-        s_transfers[index].data = 0U;
-        if (((request & DAP_TRANSFER_RNW) == 0U) ||
-            ((request & DAP_TRANSFER_MATCH_VALUE) != 0U)) {
-            if ((uint8_t)(s_request_length - input_offset) < 4U) {
+        transfers[index].request = transfer_request & 0x3FU;
+        transfers[index].data = 0U;
+        if (((transfer_request & DAP_TRANSFER_RNW) == 0U) ||
+            ((transfer_request & DAP_TRANSFER_MATCH_VALUE) != 0U)) {
+            if ((uint8_t)(request_length - input_offset) < 4U) {
                 return false;
             }
-            s_transfers[index].data =
-                decode_u32_le(&s_request[input_offset]);
+            transfers[index].data =
+                decode_u32_le(&request[input_offset]);
             input_offset = (uint8_t)(input_offset + 4U);
         } else if (++read_count > 15U) {
             return false;
         }
     }
-    s_transfer_count = count;
-    s_transfer_done = 0U;
-    s_transfer_block = false;
-    s_write_abort = false;
-    s_response[0] = DAP_TRANSFER;
-    s_response[1] = 0U;
-    s_response[2] = 0U;
-    s_response_length = 3U;
+    *count_out = count;
     return true;
 }
 
-static bool transfer_block_parse(void)
+static bool transfer_block_parse(const uint8_t *request,
+                                 uint8_t request_length,
+                                 uint8_t *count_out,
+                                 swd_tunnel_transfer_t *transfers)
 {
     uint16_t count;
-    uint8_t request;
+    uint8_t request_byte;
     uint8_t input_offset = 5U;
     uint8_t index;
 
-    /* DAP_TransferBlock 复用一个请求头并在其后排列写数据；读块最多 15
-     * 次，以保证响应包不会溢出。 */
-    if (s_request_length < 5U) {
+    if (request_length < 5U) {
         return false;
     }
-    count = (uint16_t)s_request[2] |
-            ((uint16_t)s_request[3] << 8);
-    request = s_request[4];
+    count = (uint16_t)request[2] |
+            ((uint16_t)request[3] << 8);
+    request_byte = request[4];
     if ((count > DAP_MAX_TRANSFERS) ||
-        ((request & 0xF0U) != 0U) ||
-        (((request & DAP_TRANSFER_RNW) != 0U) && (count > 15U))) {
+        ((request_byte & 0xF0U) != 0U) ||
+        (((request_byte & DAP_TRANSFER_RNW) != 0U) && (count > 15U))) {
         return false;
     }
     if (count == 0U) {
-        s_transfer_count = 0U;
-        s_transfer_done = 0U;
-        s_transfer_block = true;
-        s_write_abort = false;
-        s_response[0] = DAP_TRANSFER_BLOCK;
-        s_response[1] = 0U;
-        s_response[2] = 0U;
-        s_response[3] = 0U;
-        s_response_length = 4U;
+        *count_out = 0U;
         return true;
     }
     for (index = 0U; index < count; ++index) {
-        s_transfers[index].request = request & 0x0FU;
-        s_transfers[index].data = 0U;
-        if ((request & DAP_TRANSFER_RNW) == 0U) {
-            if ((uint8_t)(s_request_length - input_offset) < 4U) {
+        transfers[index].request = request_byte & 0x0FU;
+        transfers[index].data = 0U;
+        if ((request_byte & DAP_TRANSFER_RNW) == 0U) {
+            if ((uint8_t)(request_length - input_offset) < 4U) {
                 return false;
             }
-            s_transfers[index].data =
-                decode_u32_le(&s_request[input_offset]);
+            transfers[index].data =
+                decode_u32_le(&request[input_offset]);
             input_offset = (uint8_t)(input_offset + 4U);
         }
     }
-    s_transfer_count = (uint8_t)count;
-    s_transfer_done = 0U;
-    s_transfer_block = true;
-    s_write_abort = false;
-    s_response[0] = DAP_TRANSFER_BLOCK;
-    s_response[1] = 0U;
-    s_response[2] = 0U;
-    s_response[3] = 0U;
-    s_response_length = 4U;
+    *count_out = (uint8_t)count;
     return true;
 }
 
-static bool transfer_chunk_submit(void)
+static bool dispatch_transfer_slot(dap_slot_t *slot)
 {
-    uint8_t remaining =
-        (uint8_t)(s_transfer_count - s_transfer_done);
+    const uint8_t *s_request = slot->request;
+    uint8_t s_request_length = slot->length;
+    uint8_t count = 0U;
+    bool parsed;
 
-    s_chunk_count = remaining > CMSIS_DAP_TUNNEL_CHUNK_MAX
-                        ? CMSIS_DAP_TUNNEL_CHUNK_MAX
-                        : remaining;
-    if (!serial_bridge_swd_transfers(
-            ++s_transaction_id, &s_transfers[s_transfer_done],
-            s_chunk_count)) {
+    if (!s_connected) {
+        slot_transfer_error(slot);
+        return true;
+    }
+    if (s_request[0] == DAP_WRITE_ABORT) {
+        if (s_request_length < 6U) {
+            slot->response[1] = DAP_ERROR;
+            slot_complete(slot, 2U);
+            return true;
+        }
+        slot->transfers[0].request = 0U;
+        slot->transfers[0].data = decode_u32_le(&s_request[2]);
+        count = 1U;
+        parsed = true;
+        slot->write_abort = true;
+    } else if (s_request[0] == DAP_TRANSFER_BLOCK) {
+        parsed = transfer_block_parse(s_request, s_request_length, &count,
+                                      slot->transfers);
+        slot->transfer_block = true;
+    } else {
+        parsed = transfer_parse(s_request, s_request_length, &count,
+                                slot->transfers);
+    }
+    if (!parsed) {
+        slot_transfer_error(slot);
+        return true;
+    }
+    slot->transfer_count = count;
+    if (count == 0U) {
+        if (slot->write_abort) {
+            slot->response[0] = DAP_WRITE_ABORT;
+            slot->response[1] = DAP_ERROR;
+            slot_complete(slot, 2U);
+        } else if (slot->transfer_block) {
+            slot->response[0] = DAP_TRANSFER_BLOCK;
+            slot->response[1] = 0U;
+            slot->response[2] = 0U;
+            slot->response[3] = 0U;
+            slot_complete(slot, 4U);
+        } else {
+            slot->response[0] = DAP_TRANSFER;
+            slot->response[1] = 0U;
+            slot->response[2] = 0U;
+            slot_complete(slot, 3U);
+        }
+        return true;
+    }
+    /* 预填响应头；读数据按完成结果追加。 */
+    slot->response[0] = s_request[0];
+    if (slot->write_abort) {
+        slot->response[0] = DAP_WRITE_ABORT;
+        slot->response[1] = 0U;
+        slot->response_length = 2U;
+    } else if (slot->transfer_block) {
+        slot->response[1] = 0U;
+        slot->response[2] = 0U;
+        slot->response[3] = 0U;
+        slot->response_length = 4U;
+    } else {
+        slot->response[1] = 0U;
+        slot->response[2] = 0U;
+        slot->response_length = 3U;
+    }
+    slot->transaction = ++s_transaction_id;
+    if (!serial_bridge_swd_transfers(slot->transaction, slot->transfers,
+                                     count)) {
+        /* 桥接窗口暂时满：保持未派发状态，下一轮主循环重试。 */
+        --s_transaction_id;
         return false;
     }
-    s_deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
+    slot->dispatched = true;
+    ++s_inflight_count;
+    slot->deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
     return true;
 }
 
-static void command_transfer(void)
+static bool dispatch_control_slot(dap_slot_t *slot)
 {
-    if (!s_connected || !transfer_parse()) {
-        s_response[0] = DAP_TRANSFER;
-        s_response[1] = 0U;
-        s_response[2] = DAP_TRANSFER_ERROR;
-        response_finish(3U);
-        return;
-    }
-    if (s_transfer_count == 0U) {
-        response_finish(s_response_length);
-        return;
-    }
-    if (!transfer_chunk_submit()) {
-        s_response[0] = DAP_TRANSFER;
-        s_response[1] = 0U;
-        s_response[2] = DAP_TRANSFER_ERROR;
-        response_finish(3U);
-        return;
-    }
-    operation_start(DAP_STATE_TRANSFER);
-}
+    const uint8_t *s_request = slot->request;
+    uint8_t s_request_length = slot->length;
+    uint8_t *s_response = slot->response;
+    uint8_t command = s_request[0];
+    bool submitted = false;
+    bool validate_error = false;
 
-static void command_transfer_block(void)
-{
-    if (!s_connected || !transfer_block_parse()) {
-        s_response[0] = DAP_TRANSFER_BLOCK;
-        s_response[1] = 0U;
-        s_response[2] = 0U;
-        s_response[3] = DAP_TRANSFER_ERROR;
-        response_finish(4U);
-        return;
-    }
-    if (s_transfer_count == 0U) {
-        response_finish(s_response_length);
-        return;
-    }
-    if (!transfer_chunk_submit()) {
-        s_response[0] = DAP_TRANSFER_BLOCK;
-        s_response[1] = 0U;
-        s_response[2] = 0U;
-        s_response[3] = DAP_TRANSFER_ERROR;
-        response_finish(4U);
-        return;
-    }
-    operation_start(DAP_STATE_TRANSFER);
-}
+    slot->transaction = ++s_transaction_id;
+    switch (command) {
+    case DAP_CONNECT: {
+        uint8_t port = s_request_length >= 2U ? s_request[1] : 0U;
 
-static void command_write_abort(void)
-{
-    if (!s_connected || (s_request_length < 6U)) {
-        response_error(DAP_WRITE_ABORT);
-        return;
+        s_response[0] = DAP_CONNECT;
+        if ((port != 0U) && (port != DAP_PORT_SWD)) {
+            validate_error = true;
+        } else {
+            submitted = serial_bridge_swd_connect(slot->transaction);
+        }
+        break;
     }
-    s_transfers[0].request = 0U;
-    s_transfers[0].data = decode_u32_le(&s_request[2]);
-    s_transfer_count = 1U;
-    s_transfer_done = 0U;
-    s_chunk_count = 1U;
-    s_transfer_block = false;
-    s_write_abort = true;
-    s_response[0] = DAP_WRITE_ABORT;
-    s_response_length = 2U;
-    if (!serial_bridge_swd_transfers(++s_transaction_id,
-                                     s_transfers, 1U)) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_TRANSFER);
-}
+    case DAP_DISCONNECT:
+        s_response[0] = DAP_DISCONNECT;
+        s_connected = false;
+        submitted = serial_bridge_swd_disconnect(slot->transaction);
+        break;
+    case DAP_TRANSFER_CONFIGURE:
+        if (s_request_length < 6U) {
+            validate_error = true;
+            break;
+        }
+        s_idle_cycles = s_request[1];
+        s_retry_count = (uint16_t)s_request[2] |
+                        ((uint16_t)s_request[3] << 8);
+        s_match_retry = (uint16_t)s_request[4] |
+                        ((uint16_t)s_request[5] << 8);
+        s_response[0] = DAP_TRANSFER_CONFIGURE;
+        submitted = serial_bridge_swd_configure(
+            slot->transaction, s_idle_cycles, s_retry_count,
+            s_match_retry, s_turnaround, s_data_phase);
+        break;
+    case DAP_SWD_CONFIGURE: {
+        uint8_t value;
 
-static void command_reset(void)
-{
-    s_response[0] = DAP_RESET_TARGET;
-    if (!serial_bridge_swd_reset(++s_transaction_id)) {
-        s_response[1] = DAP_ERROR;
-        s_response[2] = 0U;
-        response_finish(3U);
-        return;
+        if (s_request_length < 2U) {
+            validate_error = true;
+            break;
+        }
+        value = s_request[1];
+        s_turnaround = (uint8_t)((value & 0x03U) + 1U);
+        s_data_phase = (value & 0x04U) != 0U;
+        s_response[0] = DAP_SWD_CONFIGURE;
+        submitted = serial_bridge_swd_configure(
+            slot->transaction, s_idle_cycles, s_retry_count,
+            s_match_retry, s_turnaround, s_data_phase);
+        break;
     }
-    operation_start(DAP_STATE_RESET);
-}
-
-static void command_swj_clock(void)
-{
-    s_response[0] = DAP_SWJ_CLOCK;
-    if ((s_request_length < 5U) ||
-        !serial_bridge_swd_clock(++s_transaction_id,
-                                 decode_u32_le(&s_request[1]))) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_COMMAND);
-}
-
-static void command_swj_pins(void)
-{
-    uint32_t wait_us;
-
-    s_response[0] = DAP_SWJ_PINS;
-    if (s_request_length < 7U) {
-        s_response[1] = 0U;
-        response_finish(2U);
-        return;
-    }
-    wait_us = decode_u32_le(&s_request[3]);
-    if (wait_us > 3000000U) {
-        wait_us = 3000000U;
-    }
-    if (!serial_bridge_swd_pins(++s_transaction_id, s_request[1],
-                                s_request[2], wait_us)) {
-        s_response[1] = 0U;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_PINS);
-}
-
-static void command_swj_sequence(void)
-{
-    uint16_t bit_count;
-    uint8_t byte_count;
-
-    s_response[0] = DAP_SWJ_SEQUENCE;
-    if (s_request_length < 3U) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    bit_count = s_request[1] == 0U ? 256U : s_request[1];
-    byte_count = (uint8_t)((bit_count + 7U) / 8U);
-    if ((s_request_length < (uint8_t)(2U + byte_count)) ||
-        !serial_bridge_swd_sequence(++s_transaction_id, bit_count,
-                                    &s_request[2])) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    operation_start(DAP_STATE_COMMAND);
-}
-
-static void command_swd_sequence(void)
-{
-    uint8_t input_offset = 2U;
-    uint8_t response_length = 1U;
-    uint8_t sequence;
-
-    s_response[0] = DAP_SWD_SEQUENCE;
-    if (s_request_length < 2U) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
-    }
-    for (sequence = 0U; sequence < s_request[1]; ++sequence) {
-        uint8_t info;
-        uint8_t bit_count;
+    case DAP_SWJ_CLOCK:
+        s_response[0] = DAP_SWJ_CLOCK;
+        if ((s_request_length < 5U) ||
+            (decode_u32_le(&s_request[1]) == 0U)) {
+            validate_error = true;
+        } else {
+            submitted = serial_bridge_swd_clock(
+                slot->transaction, decode_u32_le(&s_request[1]));
+        }
+        break;
+    case DAP_SWJ_SEQUENCE: {
+        uint16_t bit_count;
         uint8_t byte_count;
 
-        if (input_offset >= s_request_length) {
-            s_response[1] = DAP_ERROR;
-            response_finish(2U);
-            return;
+        s_response[0] = DAP_SWJ_SEQUENCE;
+        if (s_request_length < 3U) {
+            validate_error = true;
+            break;
         }
-        info = s_request[input_offset++];
-        bit_count = info & 0x3FU;
-        if (bit_count == 0U) {
-            bit_count = 64U;
-        }
+        bit_count = s_request[1] == 0U ? 256U : s_request[1];
         byte_count = (uint8_t)((bit_count + 7U) / 8U);
-        if ((info & 0x80U) != 0U) {
-            response_length =
-                (uint8_t)(response_length + byte_count);
-            if (response_length >= CMSIS_DAP_PACKET_SIZE) {
-                s_response[1] = DAP_ERROR;
-                response_finish(2U);
-                return;
-            }
+        if ((s_request_length < (uint8_t)(2U + byte_count))) {
+            validate_error = true;
         } else {
-            if ((uint8_t)(s_request_length - input_offset) <
-                byte_count) {
-                s_response[1] = DAP_ERROR;
-                response_finish(2U);
-                return;
-            }
-            input_offset = (uint8_t)(input_offset + byte_count);
+            submitted = serial_bridge_swd_sequence(
+                slot->transaction, bit_count, &s_request[2]);
         }
+        break;
     }
-    if (!serial_bridge_swd_sequence_io(
-            ++s_transaction_id, &s_request[1],
-            (uint8_t)(input_offset - 1U))) {
-        s_response[1] = DAP_ERROR;
-        response_finish(2U);
-        return;
+    case DAP_SWD_SEQUENCE: {
+        uint8_t input_offset = 2U;
+        uint8_t sequence;
+
+        s_response[0] = DAP_SWD_SEQUENCE;
+        if (s_request_length < 2U) {
+            validate_error = true;
+            break;
+        }
+        for (sequence = 0U; sequence < s_request[1]; ++sequence) {
+            uint8_t info;
+            uint8_t bit_count;
+            uint8_t byte_count;
+
+            if (input_offset >= s_request_length) {
+                validate_error = true;
+                break;
+            }
+            info = s_request[input_offset++];
+            bit_count = info & 0x3FU;
+            if (bit_count == 0U) {
+                bit_count = 64U;
+            }
+            byte_count = (uint8_t)((bit_count + 7U) / 8U);
+            if ((info & 0x80U) != 0U) {
+                if ((uint8_t)(1U + byte_count) >=
+                    CMSIS_DAP_PACKET_SIZE) {
+                    validate_error = true;
+                    break;
+                }
+            } else {
+                if ((uint8_t)(s_request_length - input_offset) <
+                    byte_count) {
+                    validate_error = true;
+                    break;
+                }
+                input_offset = (uint8_t)(input_offset + byte_count);
+            }
+        }
+        if (!validate_error) {
+            submitted = serial_bridge_swd_sequence_io(
+                slot->transaction, &s_request[1],
+                (uint8_t)(input_offset - 1U));
+        }
+        break;
     }
-    operation_start(DAP_STATE_SWD_SEQUENCE);
+    case DAP_RESET_TARGET:
+        s_response[0] = DAP_RESET_TARGET;
+        submitted = serial_bridge_swd_reset(slot->transaction);
+        break;
+    case DAP_SWJ_PINS: {
+        uint32_t wait_us;
+
+        s_response[0] = DAP_SWJ_PINS;
+        if (s_request_length < 7U) {
+            validate_error = true;
+            break;
+        }
+        wait_us = decode_u32_le(&s_request[3]);
+        if (wait_us > 3000000U) {
+            wait_us = 3000000U;
+        }
+        submitted = serial_bridge_swd_pins(
+            slot->transaction, s_request[1], s_request[2], wait_us);
+        break;
+    }
+    default:
+        validate_error = true;
+        break;
+    }
+    if (validate_error) {
+        slot->response[1] = DAP_ERROR;
+        slot_complete(slot, 2U);
+        return true;
+    }
+    if (!submitted) {
+        --s_transaction_id;
+        return false;
+    }
+    slot->dispatched = true;
+    ++s_inflight_count;
+    slot->deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
+    return true;
 }
 
-static void command_dispatch(void)
+static void dispatch_immediate_slot(dap_slot_t *slot)
 {
+    const uint8_t *s_request = slot->request;
+    uint8_t s_request_length = slot->length;
+    uint8_t *s_response = slot->response;
     uint8_t command = s_request[0];
 
     switch (command) {
     case DAP_INFO:
-        command_info();
+        command_info(slot);
         break;
     case DAP_HOST_STATUS:
         if ((s_request_length < 3U) || (s_request[1] > 1U) ||
             (s_request[2] > 1U)) {
-            response_error(command);
-            break;
-        }
-        s_response[0] = command;
-        s_response[1] = DAP_OK;
-        response_finish(2U);
-        break;
-    case DAP_TRANSFER_CONFIGURE:
-        command_transfer_configure();
-        break;
-    case DAP_CONNECT:
-        command_connect();
-        break;
-    case DAP_DISCONNECT:
-        command_disconnect();
-        break;
-    case DAP_TRANSFER:
-        command_transfer();
-        break;
-    case DAP_TRANSFER_BLOCK:
-        command_transfer_block();
-        break;
-    case DAP_TRANSFER_ABORT:
-        response_error(command);
-        break;
-    case DAP_WRITE_ABORT:
-        command_write_abort();
-        break;
-    case DAP_DELAY:
-        s_response[0] = command;
-        if (s_request_length < 3U) {
-            s_response[1] = DAP_ERROR;
-            response_finish(2U);
+            slot->response[0] = command;
+            slot->response[1] = DAP_ERROR;
+            slot_complete(slot, 2U);
         } else {
-            uint16_t delay_ms = (uint16_t)s_request[1] |
-                                ((uint16_t)s_request[2] << 8);
+            s_response[0] = command;
             s_response[1] = DAP_OK;
-            s_response_length = 2U;
-            s_deadline = board_millis() + (uint32_t)delay_ms;
-            s_state = DAP_STATE_DELAY;
+            slot_complete(slot, 2U);
         }
-        break;
-    case DAP_RESET_TARGET:
-        command_reset();
-        break;
-    case DAP_SWJ_PINS:
-        command_swj_pins();
-        break;
-    case DAP_SWJ_CLOCK:
-        command_swj_clock();
-        break;
-    case DAP_SWJ_SEQUENCE:
-        command_swj_sequence();
-        break;
-    case DAP_SWD_CONFIGURE:
-        command_swd_configure();
-        break;
-    case DAP_SWD_SEQUENCE:
-        command_swd_sequence();
         break;
     case DAP_VENDOR_STATUS:
-        command_vendor_status();
+        command_vendor_status(slot);
         break;
     case DAP_VENDOR_TRACE:
-        command_vendor_trace();
+        command_vendor_trace(slot);
+        break;
+    case DAP_TRANSFER_ABORT:
+        cmsis_dap_abort();
+        slot->response[0] = command;
+        slot->response[1] = DAP_ERROR;
+        slot_complete(slot, 2U);
         break;
     default:
-        response_invalid();
+        s_response[0] = 0xFFU;
+        slot_complete(slot, 1U);
         break;
     }
 }
 
-static void connect_complete(const swd_tunnel_response_t *result)
+static void dispatch_pipelines(void)
 {
-    s_connected = result->ack == TARGET_SWD_ACK_OK;
-    s_response[1] = s_connected ? DAP_PORT_SWD : DAP_PORT_DISABLED;
-    response_finish(2U);
+    uint8_t index = s_slot_head;
+    uint8_t scanned;
+
+    for (scanned = 0U; scanned < s_slot_count; ++scanned) {
+        dap_slot_t *slot = &s_slots[index];
+
+        if (slot->response_ready) {
+            index = slot_next(index);
+            continue;
+        }
+        if (slot->dispatched) {
+            /* 桥接在途或屏障未完成：按序等待。 */
+            if (slot->kind != SLOT_KIND_TRANSFER) {
+                break;
+            }
+            index = slot_next(index);
+            continue;
+        }
+        switch (slot->kind) {
+        case SLOT_KIND_TRANSFER:
+            if (!dispatch_transfer_slot(slot)) {
+                return;
+            }
+            break;
+        case SLOT_KIND_CONTROL:
+            if (s_inflight_count != 0U) {
+                return;
+            }
+            if (!dispatch_control_slot(slot)) {
+                return;
+            }
+            break;
+        case SLOT_KIND_DELAY:
+            if (s_inflight_count != 0U) {
+                return;
+            }
+            slot->dispatched = true;
+            slot->deadline = board_millis() +
+                             (uint32_t)((uint16_t)slot->request[1] |
+                                        ((uint16_t)slot->request[2] << 8));
+            break;
+        default:
+            dispatch_immediate_slot(slot);
+            break;
+        }
+        index = slot_next(index);
+    }
 }
 
-static void transfer_complete(const swd_tunnel_response_t *result)
+static void complete_control_slot(dap_slot_t *slot,
+                                  const swd_tunnel_response_t *result)
+{
+    uint8_t *s_response = slot->response;
+    uint8_t command = slot->request[0];
+    uint8_t ok = result->ack == TARGET_SWD_ACK_OK ? DAP_OK : DAP_ERROR;
+
+    switch (command) {
+    case DAP_CONNECT:
+        s_connected = result->ack == TARGET_SWD_ACK_OK;
+        s_response[1] = s_connected ? DAP_PORT_SWD : DAP_PORT_DISABLED;
+        slot_complete(slot, 2U);
+        break;
+    case DAP_DISCONNECT:
+        s_response[1] = DAP_OK;
+        slot_complete(slot, 2U);
+        break;
+    case DAP_RESET_TARGET:
+        s_response[1] = ok;
+        s_response[2] = 1U;
+        slot_complete(slot, 3U);
+        break;
+    case DAP_SWJ_PINS:
+        s_response[1] =
+            result->completed != 0U ? (uint8_t)result->data[0] : 0U;
+        slot_complete(slot, 2U);
+        break;
+    case DAP_SWD_SEQUENCE:
+        if ((result->operation != SWD_TUNNEL_OP_SWD_SEQUENCE) ||
+            (result->raw_length == 0U) ||
+            (result->raw_length >= CMSIS_DAP_PACKET_SIZE)) {
+            s_response[1] = DAP_ERROR;
+            slot_complete(slot, 2U);
+        } else {
+            memcpy(&s_response[1], result->raw, result->raw_length);
+            slot_complete(slot, (uint8_t)(1U + result->raw_length));
+        }
+        break;
+    default:
+        s_response[1] = ok;
+        slot_complete(slot, 2U);
+        break;
+    }
+}
+
+static void complete_transfer_slot(dap_slot_t *slot,
+                                   const swd_tunnel_response_t *result)
 {
     uint8_t index;
 
-    if (s_write_abort) {
-        s_response[1] =
+    if (slot->write_abort) {
+        slot->response[1] =
             result->ack == TARGET_SWD_ACK_OK ? DAP_OK : DAP_ERROR;
-        response_finish(2U);
+        slot_complete(slot, 2U);
+        return;
+    }
+    if ((result->operation != SWD_TUNNEL_OP_BLOCK) ||
+        (result->completed > slot->transfer_count)) {
+        slot_transfer_error(slot);
         return;
     }
     for (index = 0U; index < result->completed; ++index) {
-        uint8_t transfer_index = (uint8_t)(s_transfer_done + index);
-
-        if ((s_transfers[transfer_index].request &
-             DAP_TRANSFER_RNW) != 0U &&
-            (s_transfers[transfer_index].request &
-             DAP_TRANSFER_MATCH_VALUE) == 0U) {
-            if (s_response_length >
+        if ((slot->transfers[index].request & DAP_TRANSFER_RNW) != 0U &&
+            (slot->transfers[index].request & DAP_TRANSFER_MATCH_VALUE) ==
+                0U) {
+            if (slot->response_length >
                 CMSIS_DAP_PACKET_SIZE - 4U) {
-                if (s_transfer_block) {
-                    s_response[3] = DAP_TRANSFER_ERROR;
-                } else {
-                    s_response[2] = DAP_TRANSFER_ERROR;
-                }
-                response_finish(s_response_length);
+                slot_transfer_error(slot);
                 return;
             }
-            encode_u32_le(&s_response[s_response_length],
+            encode_u32_le(&slot->response[slot->response_length],
                           result->data[index]);
-            s_response_length =
-                (uint8_t)(s_response_length + 4U);
+            slot->response_length =
+                (uint8_t)(slot->response_length + 4U);
         }
     }
-    s_transfer_done =
-        (uint8_t)(s_transfer_done + result->completed);
-    if (s_transfer_block) {
-        s_response[1] = s_transfer_done;
-        s_response[2] = 0U;
-        s_response[3] = result->ack;
+    if (slot->transfer_block) {
+        slot->response[1] = result->completed;
+        slot->response[2] = 0U;
+        slot->response[3] = result->ack;
     } else {
-        s_response[1] = s_transfer_done;
-        s_response[2] = result->ack;
+        slot->response[1] = result->completed;
+        slot->response[2] = result->ack;
     }
-    if ((result->ack != TARGET_SWD_ACK_OK) ||
-        (result->completed != s_chunk_count) ||
-        (s_transfer_done == s_transfer_count)) {
-        response_finish(s_response_length);
+    slot_complete(slot, slot->response_length);
+}
+
+static void drain_responses(void)
+{
+    swd_tunnel_response_t result;
+
+    while (serial_bridge_swd_response_take(&result)) {
+        dap_slot_t *slot = outstanding_slot();
+        bool is_transfer;
+
+
+        if ((slot == NULL) ||
+            (result.transaction_id != slot->transaction)) {
+            /* 迟到的重复响应：桥接层已按事务 ID 匹配，这里兜底丢弃。 */
+            continue;
+        }
+        is_transfer = slot->kind == SLOT_KIND_TRANSFER;
+        if (is_transfer) {
+            complete_transfer_slot(slot, &result);
+        } else {
+            complete_control_slot(slot, &result);
+        }
+        --s_inflight_count;
+    }
+}
+
+static void parent_start_next(void)
+{
+    uint8_t len;
+
+    if (s_parent_request_offset >= s_parent_request_length) {
+        /* 全部子命令响应已按序拼装完成。 */
+        s_parent_active = false;
+        s_parent_response_ready = true;
         return;
     }
-    if (!transfer_chunk_submit()) {
-        if (s_transfer_block) {
-            s_response[3] = DAP_TRANSFER_ERROR;
-        } else {
-            s_response[2] = DAP_TRANSFER_ERROR;
+    if (!command_length(&s_parent_request[s_parent_request_offset],
+                        (uint8_t)(s_parent_request_length -
+                                  s_parent_request_offset), &len) ||
+        !slot_push(&s_parent_request[s_parent_request_offset], len)) {
+        s_parent_active = false;
+        s_parent_response[0] = 0xFFU;
+        s_parent_response_offset = 1U;
+        s_parent_response_ready = true;
+        return;
+    }
+    s_parent_request_offset = (uint8_t)(s_parent_request_offset + len);
+}
+
+/* 父命令的子响应按序拼装；子命令槽在拼装后立即释放（不等待 USB）。
+ * 循环直到没有新进展：子命令同步完成（Immediate/零传输）时继续拼装，
+ * 异步子命令在途或派发受阻时返回，等待后续推进。 */
+static void collect_parent_response(void)
+{
+    while (s_parent_active) {
+        while ((s_slot_count != 0U) &&
+               s_slots[s_slot_head].response_ready) {
+            dap_slot_t *slot = &s_slots[s_slot_head];
+            uint8_t length = slot->response_length;
+
+            if ((uint16_t)s_parent_response_offset + length >
+                CMSIS_DAP_PACKET_SIZE) {
+                s_parent_active = false;
+                s_parent_response[0] = 0xFFU;
+                s_parent_response_offset = 1U;
+                s_parent_response_ready = true;
+                /* 剩余子命令尚未派发（子命令按序完成），可直接丢弃。 */
+                s_slot_head = 0U;
+                s_slot_count = 0U;
+                s_inflight_count = 0U;
+                return;
+            }
+            memcpy(&s_parent_response[s_parent_response_offset],
+                   slot->response, length);
+            s_parent_response_offset =
+                (uint8_t)(s_parent_response_offset + length);
+            s_slot_head = slot_next(s_slot_head);
+            --s_slot_count;
+            parent_start_next();
         }
-        response_finish(s_response_length);
+        if (!s_parent_active) {
+            return;
+        }
+        dispatch_pipelines();
+        if ((s_slot_count == 0U) ||
+            !s_slots[s_slot_head].response_ready) {
+            /* 队头在途或派发受阻：本轮无新进展。 */
+            return;
+        }
     }
 }
 
 void cmsis_dap_init(void)
 {
-    s_state = DAP_STATE_IDLE;
-    s_response_ready = false;
-    s_connected = false;
+    s_slot_head = 0U;
+    s_slot_count = 0U;
+    s_inflight_count = 0U;
     s_transaction_id = 0U;
     s_idle_cycles = 0U;
     s_retry_count = 100U;
@@ -1187,42 +1064,40 @@ void cmsis_dap_init(void)
     s_turnaround = 1U;
     s_data_phase = false;
     s_abort_requested = false;
-    s_cancel_waiting = false;
+    s_connected = false;
     s_parent_active = false;
-    s_burst_response_count = 0U;
-    s_burst_response_read = 0U;
-    s_burst_command_count = 0U;
+    s_parent_response_ready = false;
 }
 
 bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
 {
     if ((request == NULL) || (length == 0U) ||
-        (length > sizeof(s_request)) ||
-        (s_state != DAP_STATE_IDLE) || s_response_ready) {
+        (length > CMSIS_DAP_PACKET_SIZE)) {
         return false;
     }
     if (request[0] == 0x7FU) {
-        if (length < 2U || request[1] == 0U || request[1] > 32U ||
+        /* ExecuteCommands：仅在流水线完全空闲时启动。 */
+        if (s_parent_active || (s_slot_count != 0U) ||
+            (length < 2U) || request[1] == 0U || request[1] > 32U ||
             length > sizeof(s_parent_request)) {
-            s_response[0] = 0xFFU; response_finish(1U); return true;
+            return false;
         }
         memcpy(s_parent_request, request, length);
         s_parent_count = request[1];
-        s_parent_index = 0U;
         s_parent_request_offset = 2U;
         s_parent_request_length = length;
         s_parent_response_offset = 2U;
         s_parent_response[0] = 0x7FU;
         s_parent_response[1] = s_parent_count;
         s_parent_active = true;
-        if (!parent_start_next()) {
-            s_parent_active = false; s_response[0] = 0xFFU; response_finish(1U);
-        }
+        parent_start_next();
+        collect_parent_response();
         return true;
     }
-    memcpy(s_request, request, length);
-    s_request_length = length;
-    command_dispatch();
+    if (!slot_push(request, length)) {
+        return false;
+    }
+    dispatch_pipelines();
     return true;
 }
 
@@ -1234,264 +1109,106 @@ void cmsis_dap_abort(void)
 
 void cmsis_dap_process(void)
 {
-    swd_tunnel_response_t result;
+    dap_slot_t *slot;
 
-    if (s_state == DAP_STATE_BURST) {
-        swd_tunnel_burst_response_t burst_response;
-
-        if (s_abort_requested) {
-            s_abort_requested = false;
-            serial_bridge_swd_cancel(s_burst_transaction);
-        }
-        serial_bridge_swd_pump();
-        if (serial_bridge_swd_burst_response_take(&burst_response)) {
-            if (!burst_responses_build(&burst_response)) {
-                uint8_t index;
-
-                for (index = 0U; index < s_burst_command_count;
-                     ++index) {
-                    uint8_t *output = s_burst_responses[index];
-                    output[0] = s_burst_commands[index].transfer_block
-                                    ? DAP_TRANSFER_BLOCK
-                                    : DAP_TRANSFER;
-                    output[1] = 0U;
-                    output[2] = s_burst_commands[index].transfer_block
-                                    ? 0U
-                                    : DAP_TRANSFER_ERROR;
-                    if (s_burst_commands[index].transfer_block) {
-                        output[3] = DAP_TRANSFER_ERROR;
-                        s_burst_response_lengths[index] = 4U;
-                    } else {
-                        s_burst_response_lengths[index] = 3U;
-                    }
-                }
-                s_burst_response_count = s_burst_command_count;
-                s_burst_response_read = 0U;
-            }
-            s_state = DAP_STATE_IDLE;
-            return;
-        }
-        if ((int32_t)(board_millis() - s_deadline) >= 0) {
-            uint8_t index;
-
-            serial_bridge_swd_cancel(s_burst_transaction);
-            for (index = 0U; index < s_burst_command_count;
-                 ++index) {
-                uint8_t *output = s_burst_responses[index];
-                output[0] = s_burst_commands[index].transfer_block
-                                ? DAP_TRANSFER_BLOCK
-                                : DAP_TRANSFER;
-                output[1] = 0U;
-                output[2] = s_burst_commands[index].transfer_block
-                                ? 0U
-                                : DAP_TRANSFER_ERROR;
-                if (s_burst_commands[index].transfer_block) {
-                    output[3] = DAP_TRANSFER_ERROR;
-                    s_burst_response_lengths[index] = 4U;
-                } else {
-                    s_burst_response_lengths[index] = 3U;
-                }
-            }
-            s_burst_response_count = index;
-            s_burst_response_read = 0U;
-            s_state = DAP_STATE_IDLE;
-        }
-        return;
-    }
-
-    /* 这是命令核心的异步部分。USB 回调只提交或复制数据，桥接响应和超时
-     * 处理全部在主循环完成。 */
-    if ((s_state == DAP_STATE_IDLE) || s_response_ready) {
-        s_abort_requested = false;
-        return;
-    }
-    if (s_state == DAP_STATE_DELAY) {
-        if ((int32_t)(board_millis() - s_deadline) >= 0) {
-            response_finish(2U);
-        }
-        return;
-    }
     if (s_abort_requested) {
         s_abort_requested = false;
-        if ((s_state == DAP_STATE_TRANSFER) && !s_cancel_waiting) {
-            serial_bridge_swd_cancel(s_transaction_id);
-            s_cancel_waiting = true;
-            s_deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
-            return;
+        slot = outstanding_slot();
+        if ((slot != NULL) && (slot->kind == SLOT_KIND_TRANSFER) &&
+            !slot->cancel_waiting) {
+            serial_bridge_swd_cancel(slot->transaction);
+            slot->cancel_waiting = true;
+            slot->deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
         }
     }
-    if (s_cancel_waiting) {
+    slot = outstanding_slot();
+    if ((slot != NULL) && slot->cancel_waiting) {
         /* Abort 采用协作式完成：保持原响应格式，在桥接取消完成或超时后
          * 报告传输错误。 */
-        if (!serial_bridge_swd_cancel_complete(s_transaction_id) &&
-            ((int32_t)(board_millis() - s_deadline) < 0)) {
-            return;
+        if (serial_bridge_swd_cancel_complete(slot->transaction) ||
+            ((int32_t)(board_millis() - slot->deadline) >= 0)) {
+            slot->cancel_waiting = false;
+            if (slot->write_abort) {
+                slot->response[0] = DAP_WRITE_ABORT;
+                slot->response[1] = DAP_ERROR;
+                slot_complete(slot, 2U);
+            } else {
+                slot_transfer_error(slot);
+            }
+            --s_inflight_count;
         }
-        s_cancel_waiting = false;
-        if (s_write_abort) {
-            s_response[1] = DAP_ERROR;
-        } else if (s_transfer_block) {
-            s_response[3] = DAP_TRANSFER_ERROR;
-        } else {
-            s_response[2] = DAP_TRANSFER_ERROR;
-        }
-        response_finish(s_response_length);
-        return;
     }
-    /* 先推进本地 SWD 引擎，再取响应。否则有线 block 要等到下一轮主循环才
-     * 能被取走，每个 block 白付一轮调度开销。 */
     serial_bridge_swd_pump();
-    if (serial_bridge_swd_response_take(&result)) {
-        /* 事务 ID 用于丢弃已取消操作的迟到无线或 UART 响应。 */
-        if (result.transaction_id != s_transaction_id) {
-            return;
-        }
-        if (s_state == DAP_STATE_CONNECT) {
-            if (result.operation != SWD_TUNNEL_OP_CONNECT) {
-                s_connected = false;
-                s_response[1] = DAP_PORT_DISABLED;
-                response_finish(2U);
-                return;
+    drain_responses();
+    collect_parent_response();
+    slot = outstanding_slot();
+    if (slot != NULL) {
+        if (slot->kind == SLOT_KIND_DELAY) {
+            if ((int32_t)(board_millis() - slot->deadline) >= 0) {
+                slot->response[0] = DAP_DELAY;
+                slot->response[1] = DAP_OK;
+                slot_complete(slot, 2U);
             }
-            connect_complete(&result);
-        } else if (s_state == DAP_STATE_TRANSFER) {
-            if ((result.operation != SWD_TUNNEL_OP_BLOCK) ||
-                (result.completed > s_chunk_count) ||
-                (result.completed >
-                 (uint8_t)(s_transfer_count - s_transfer_done))) {
-                if (s_write_abort) {
-                    s_response[1] = DAP_ERROR;
-                } else if (s_transfer_block) {
-                    s_response[3] = DAP_TRANSFER_ERROR;
-                } else {
-                    s_response[2] = DAP_TRANSFER_ERROR;
-                }
-                response_finish(s_response_length);
-                return;
-            }
-            transfer_complete(&result);
-        } else if (s_state == DAP_STATE_RESET) {
-            if (result.operation != SWD_TUNNEL_OP_RESET) {
-                s_response[1] = DAP_ERROR;
-                s_response[2] = 0U;
-                response_finish(3U);
-                return;
-            }
-            s_response[1] =
-                result.ack == TARGET_SWD_ACK_OK ? DAP_OK : DAP_ERROR;
-            s_response[2] = 1U;
-            response_finish(3U);
-        } else if (s_state == DAP_STATE_COMMAND) {
-            uint8_t expected_operation = s_response[0] == DAP_DISCONNECT
-                                             ? SWD_TUNNEL_OP_DISCONNECT
-                                         : s_response[0] ==
-                                                   DAP_TRANSFER_CONFIGURE ||
-                                                   s_response[0] ==
-                                                       DAP_SWD_CONFIGURE
-                                             ? SWD_TUNNEL_OP_CONFIGURE
-                                         : s_response[0] == DAP_SWJ_CLOCK
-                                             ? SWD_TUNNEL_OP_CLOCK
-                                             : SWD_TUNNEL_OP_SEQUENCE;
-
-            if (result.operation != expected_operation) {
-                s_response[1] = s_response[0] == DAP_DISCONNECT
-                                    ? DAP_OK
-                                    : DAP_ERROR;
-                response_finish(2U);
-                return;
-            }
-            s_response[1] = s_response[0] == DAP_DISCONNECT
-                                ? DAP_OK
-                                : result.ack == TARGET_SWD_ACK_OK
-                                      ? DAP_OK
-                                      : DAP_ERROR;
-            response_finish(2U);
-        } else if (s_state == DAP_STATE_PINS) {
-            if (result.operation != SWD_TUNNEL_OP_PINS) {
-                s_response[1] = 0U;
-                response_finish(2U);
-                return;
-            }
-            s_response[1] =
-                result.completed != 0U ? (uint8_t)result.data[0] : 0U;
-            response_finish(2U);
-        } else if (s_state == DAP_STATE_SWD_SEQUENCE) {
-            if ((result.operation != SWD_TUNNEL_OP_SWD_SEQUENCE) ||
-                (result.raw_length == 0U) ||
-                (result.raw_length >= CMSIS_DAP_PACKET_SIZE)) {
-                s_response[1] = DAP_ERROR;
-                response_finish(2U);
+        } else if ((int32_t)(board_millis() - slot->deadline) >= 0) {
+            /* 超时终止队头命令：先取消桥接操作，再生成错误响应。 */
+            serial_bridge_swd_cancel(slot->transaction);
+            if (slot->kind == SLOT_KIND_TRANSFER) {
+                slot_transfer_error(slot);
             } else {
-                memcpy(&s_response[1], result.raw,
-                       result.raw_length);
-                response_finish(
-                    (uint8_t)(1U + result.raw_length));
+                /* 与 Arm 实现一致：Disconnect 超时仍返回 OK。 */
+                slot->response[1] = slot->request[0] == DAP_DISCONNECT
+                                        ? DAP_OK
+                                        : DAP_ERROR;
+                slot_complete(slot, 2U);
             }
-        }
-        return;
-    }
-    if ((int32_t)(board_millis() - s_deadline) >= 0) {
-        /* 超时终止当前命令。先取消桥接操作，再生成该命令对应的
-         * CMSIS-DAP 错误响应。 */
-        serial_bridge_swd_cancel(s_transaction_id);
-        if (s_state == DAP_STATE_CONNECT) {
-            s_connected = false;
-            s_response[1] = DAP_PORT_DISABLED;
-            response_finish(2U);
-        } else if (s_state == DAP_STATE_TRANSFER) {
-            if (s_write_abort) {
-                s_response[1] = DAP_ERROR;
-            } else if (s_transfer_block) {
-                s_response[3] = DAP_TRANSFER_ERROR;
-            } else {
-                s_response[2] = DAP_TRANSFER_ERROR;
-            }
-            response_finish(s_response_length);
-        } else if (s_state == DAP_STATE_RESET) {
-            s_response[1] = DAP_ERROR;
-            s_response[2] = 0U;
-            response_finish(3U);
-        } else {
-            s_response[1] = s_response[0] == DAP_DISCONNECT
-                                ? DAP_OK
-                                : DAP_ERROR;
-            response_finish(2U);
+            --s_inflight_count;
         }
     }
+    dispatch_pipelines();
 }
 
 bool cmsis_dap_busy(void)
 {
-    return (s_state != DAP_STATE_IDLE) || s_response_ready ||
-           (s_burst_response_count != 0U);
+    return (s_slot_count != 0U) || s_parent_active || s_parent_response_ready;
 }
 
 uint8_t cmsis_dap_response_pending_count(void)
 {
-    if (s_response_ready) {
-        return 1U;
+    uint8_t count = s_parent_response_ready ? 1U : 0U;
+    uint8_t index = s_slot_head;
+    uint8_t scanned;
+
+    for (scanned = 0U; scanned < s_slot_count; ++scanned) {
+        if (s_slots[index].response_ready) {
+            ++count;
+        }
+        index = slot_next(index);
     }
-    return s_burst_response_count;
+    return count;
 }
 
 bool cmsis_dap_response_take(uint8_t *response, uint8_t *length)
 {
-    if ((response != NULL) && (length != NULL) &&
-        (s_burst_response_count != 0U)) {
-        *length = s_burst_response_lengths[s_burst_response_read];
-        memcpy(response, s_burst_responses[s_burst_response_read], *length);
-        ++s_burst_response_read;
-        --s_burst_response_count;
-        if (s_burst_response_count == 0U) {
-            s_burst_response_read = 0U;
-        }
-        return true;
-    }
-    if ((response == NULL) || (length == NULL) || !s_response_ready) {
+    if ((response == NULL) || (length == NULL)) {
         return false;
     }
-    *length = s_response_length;
-    memcpy(response, s_response, s_response_length);
-    s_response_ready = false;
+    collect_parent_response();
+    if (s_parent_response_ready) {
+        *length = s_parent_response_offset;
+        memcpy(response, s_parent_response, s_parent_response_offset);
+        s_parent_response_ready = false;
+        return true;
+    }
+    if (s_parent_active || (s_slot_count == 0U) ||
+        !s_slots[s_slot_head].response_ready) {
+        return false;
+    }
+    *length = s_slots[s_slot_head].response_length;
+    memcpy(response, s_slots[s_slot_head].response, *length);
+    s_slots[s_slot_head].dispatched = false;
+    s_slots[s_slot_head].response_ready = false;
+    s_slot_head = slot_next(s_slot_head);
+    --s_slot_count;
+    dispatch_pipelines();
     return true;
 }

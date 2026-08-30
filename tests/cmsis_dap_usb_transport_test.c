@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#define CMSIS_DAP_SWD_BURST_ENABLE 1
 #include "cmsis_dap.h"
 #include "cmsis_dap_usb.h"
 
@@ -20,9 +19,6 @@ static uint8_t s_response_value;
 static bool s_core_busy;
 static bool s_receive_armed;
 static bool s_response_ready;
-static uint8_t s_burst_submit_count;
-static uint8_t s_burst_last_count;
-static uint8_t s_burst_reject_count;
 
 static void endpoint_setup(usb_dev *udev, uint8_t buf_kind,
                            uint32_t buf_addr, const usb_desc_ep *ep_desc)
@@ -83,26 +79,6 @@ bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
     assert(length != 0U);
     ++s_submit_count;
     s_last_submit_command = request[0];
-    s_core_busy = true;
-    return true;
-}
-
-bool cmsis_dap_burst_eligible(const uint8_t *request, uint8_t length)
-{
-    return (request != NULL) && (length != 0U) &&
-           ((request[0] == 0x05U) || (request[0] == 0x06U));
-}
-
-bool cmsis_dap_submit_burst(const uint8_t *const requests[],
-                            const uint8_t lengths[], uint8_t count)
-{
-    assert(requests != NULL);
-    assert(lengths != NULL);
-    if (count == s_burst_reject_count) {
-        return false;
-    }
-    ++s_burst_submit_count;
-    s_burst_last_count = count;
     s_core_busy = true;
     return true;
 }
@@ -220,7 +196,11 @@ int main(void)
     receive_packet(&device, request, sizeof(request));
     receive_packet(&device, request, sizeof(request));
     receive_packet(&device, request, sizeof(request));
-    /* Four advertised request slots remain available, and the extra
+    receive_packet(&device, request, sizeof(request));
+    receive_packet(&device, request, sizeof(request));
+    receive_packet(&device, request, sizeof(request));
+    receive_packet(&device, request, sizeof(request));
+    /* Eight advertised request slots remain available, and the extra
      * internal slot keeps the endpoint armed for an abort. */
     assert(s_receive_armed);
     receive_packet(&device, abort_request, sizeof(abort_request));
@@ -232,49 +212,5 @@ int main(void)
     assert(s_submit_count == 5U);
     assert(s_receive_armed);
     assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
-
-    {
-        const uint8_t eligible[] = {0x05U};
-        const uint8_t boundary[] = {0x00U};
-        uint8_t single_before = s_submit_count;
-
-        assert(cmsis_dap_usb_class.init(&device, 0U) == USBD_OK);
-        s_burst_submit_count = 0U;
-        receive_packet(&device, eligible, sizeof(eligible));
-        cmsis_dap_usb_process();
-        assert(s_submit_count == (uint8_t)(single_before + 1U));
-        assert(s_burst_submit_count == 0U);
-        assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
-
-        assert(cmsis_dap_usb_class.init(&device, 0U) == USBD_OK);
-        single_before = s_submit_count;
-        receive_packet(&device, eligible, sizeof(eligible));
-        receive_packet(&device, eligible, sizeof(eligible));
-        cmsis_dap_usb_process();
-        assert(s_burst_submit_count == 1U);
-        assert(s_burst_last_count == 2U);
-        assert(s_submit_count == single_before);
-        assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
-
-        assert(cmsis_dap_usb_class.init(&device, 0U) == USBD_OK);
-        single_before = s_submit_count;
-        receive_packet(&device, eligible, sizeof(eligible));
-        receive_packet(&device, boundary, sizeof(boundary));
-        cmsis_dap_usb_process();
-        assert(s_submit_count == (uint8_t)(single_before + 1U));
-        assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
-
-        assert(cmsis_dap_usb_class.init(&device, 0U) == USBD_OK);
-        s_burst_reject_count = 3U;
-        s_burst_submit_count = 0U;
-        receive_packet(&device, eligible, sizeof(eligible));
-        receive_packet(&device, eligible, sizeof(eligible));
-        receive_packet(&device, eligible, sizeof(eligible));
-        cmsis_dap_usb_process();
-        assert(s_burst_submit_count == 1U);
-        assert(s_burst_last_count == 2U);
-        s_burst_reject_count = 0U;
-        assert(cmsis_dap_usb_class.deinit(&device, 0U) == USBD_OK);
-    }
     return 0;
 }

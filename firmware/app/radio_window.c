@@ -36,9 +36,6 @@ static radio_window_slot_t *free_slot(radio_window_slot_t *slots)
 void radio_window_init(radio_window_t *window, uint32_t tx_sequence,
                        uint32_t rx_sequence)
 {
-    if (window == NULL) {
-        return;
-    }
     memset(window, 0, sizeof(*window));
     window->tx_next = tx_sequence;
     window->rx_next = rx_sequence;
@@ -49,8 +46,7 @@ bool radio_window_tx_push(radio_window_t *window, const uint8_t *payload,
 {
     radio_window_slot_t *slot;
 
-    if ((window == NULL) || (payload == NULL) || (length == 0U) ||
-        (length > RADIO_WINDOW_MAX_PAYLOAD) || (sequence == NULL)) {
+    if ((length == 0U) || (length > RADIO_WINDOW_MAX_PAYLOAD)) {
         return false;
     }
     slot = free_slot(window->tx);
@@ -72,9 +68,6 @@ void radio_window_tx_ack(radio_window_t *window, uint32_t ack_next,
 {
     uint8_t index;
 
-    if (window == NULL) {
-        return;
-    }
     for (index = 0U; index < RADIO_WINDOW_SIZE; ++index) {
         radio_window_slot_t *slot = &window->tx[index];
         uint32_t offset;
@@ -98,9 +91,6 @@ uint8_t radio_window_tx_active(const radio_window_t *window)
     uint8_t count = 0U;
     uint8_t index;
 
-    if (window == NULL) {
-        return 0U;
-    }
     for (index = 0U; index < RADIO_WINDOW_SIZE; ++index) {
         if (window->tx[index].active) {
             ++count;
@@ -123,9 +113,6 @@ bool radio_window_tx_due(const radio_window_t *window, uint32_t now_ms,
 {
     uint8_t index;
 
-    if ((window == NULL) || (sequence == NULL)) {
-        return false;
-    }
     for (index = 0U; index < RADIO_WINDOW_SIZE; ++index) {
         const radio_window_slot_t *slot = &window->tx[index];
 
@@ -142,12 +129,8 @@ bool radio_window_tx_due(const radio_window_t *window, uint32_t now_ms,
 bool radio_window_tx_mark_sent(radio_window_t *window, uint32_t sequence,
                                uint32_t now_ms)
 {
-    radio_window_slot_t *slot;
+    radio_window_slot_t *slot = tx_slot_find(window, sequence);
 
-    if (window == NULL) {
-        return false;
-    }
-    slot = tx_slot_find(window, sequence);
     if (slot == NULL) {
         return false;
     }
@@ -162,8 +145,7 @@ bool radio_window_rx_accept(radio_window_t *window, uint32_t sequence,
     uint32_t offset;
     radio_window_slot_t *slot;
 
-    if ((window == NULL) || (payload == NULL) || (length == 0U) ||
-        (length > RADIO_WINDOW_MAX_PAYLOAD)) {
+    if ((length == 0U) || (length > RADIO_WINDOW_MAX_PAYLOAD)) {
         return false;
     }
     if (sequence_before(sequence, window->rx_next)) {
@@ -191,9 +173,6 @@ bool radio_window_rx_accept(radio_window_t *window, uint32_t sequence,
 void radio_window_rx_ack(const radio_window_t *window, uint32_t *ack_next,
                          uint32_t *bitmap)
 {
-    if ((window == NULL) || (ack_next == NULL) || (bitmap == NULL)) {
-        return;
-    }
     *ack_next = window->rx_next;
     *bitmap = window->rx_bitmap;
 }
@@ -203,8 +182,7 @@ bool radio_window_rx_take(radio_window_t *window, uint8_t *payload,
 {
     radio_window_slot_t *slot;
 
-    if ((window == NULL) || (payload == NULL) || (length == NULL) ||
-        ((window->rx_bitmap & 1U) == 0U)) {
+    if ((window->rx_bitmap & 1U) == 0U) {
         return false;
     }
     slot = NULL;

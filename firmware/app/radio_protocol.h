@@ -22,11 +22,12 @@
 #include <stdint.h>
 
 /* 线格式为 magic[2]、version、type、network/session/sequence（BE32），
- * 第 16 字节为 payload_length，第 17 字节开始为 payload。v4 增加
- * SWD Burst 请求和响应；不保留旧无线固件兼容路径。 */
+ * 第 16 字节为 payload_length，第 17 字节开始为 payload。v4 移除
+ * SWD Burst 帧，SWD 请求不再发送独立请求 ACK。不保留旧无线固件兼容
+ * 路径。 */
 #define RADIO_PROTOCOL_HEADER_SIZE  17U
 #define RADIO_PROTOCOL_PAYLOAD_SIZE 110U
-#define RADIO_PROTOCOL_VERSION       3U
+#define RADIO_PROTOCOL_VERSION       4U
 #define RADIO_PROTOCOL_ACK_PAYLOAD_SIZE 17U
 #define RADIO_PROTOCOL_ACK_COMPACT_PAYLOAD_SIZE 8U
 #define RADIO_PROTOCOL_FRAME_SIZE \
@@ -43,13 +44,9 @@ typedef enum {
     RADIO_FRAME_PROFILE_SWITCH,
     RADIO_FRAME_PROFILE_CONFIRM,
     RADIO_FRAME_SESSION_START,
-    RADIO_FRAME_HOP_SWITCH,
-    RADIO_FRAME_HOP_CONFIRM,
     RADIO_FRAME_SWD_ABORT,
     RADIO_FRAME_SWD_BLOCK,
-    RADIO_FRAME_SWD_BLOCK_RESPONSE,
-    RADIO_FRAME_SWD_BURST,
-    RADIO_FRAME_SWD_BURST_RESPONSE
+    RADIO_FRAME_SWD_BLOCK_RESPONSE
 } radio_frame_type_t;
 
 typedef struct {
