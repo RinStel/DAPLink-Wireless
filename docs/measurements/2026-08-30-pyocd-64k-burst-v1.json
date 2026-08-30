@@ -1,0 +1,12 @@
+{
+  "date": "2026-08-30",
+  "test": "pyocd flash --erase chip, STM32F103C8, 65536 bytes",
+  "reference_kB_s": 5.30,
+  "iterations": [
+    {"firmware": "1.0.36", "result_kB_s": 5.72, "burst_tx_count": 0, "burst_fallback_count": 1030, "rf_retransmits": 0, "finding": "USB Bulk padding was rejected by the initial eligibility check"},
+    {"firmware": "1.0.37", "result_kB_s": 5.72, "burst_tx_count": 0, "burst_fallback_count": 1031, "rf_retransmits": 0, "finding": "padding fix passed software tests, but every real burst still fell back"},
+    {"firmware": "1.0.38", "result_kB_s": 5.30, "burst_tx_count": 0, "burst_fallback_count": 1030, "burst_reject_parse_count": 0, "burst_reject_capacity_count": 1993, "burst_reject_bridge_count": 0, "rf_retransmits": 0, "ack_wait_us_avg": 1232.6924443975224, "remote_roundtrip_us_avg": 1716.8073605843517, "response_to_usb_in_us_avg": 734.5320410169968, "rx_restore_us_avg": 138.45463021491784}
+  ],
+  "conclusion": "Burst v1 is rejected by the bidirectional 110-byte capacity model for the sustained pyOCD programming and verify request sequence. It produced no burst transaction and no attributable throughput gain.",
+  "decision": "Restore wireless protocol v3 single-block behavior before testing delay or packet-overhead changes."
+}

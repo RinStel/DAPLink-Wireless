@@ -1,0 +1,9 @@
+{
+  "firmware": "1.0.44",
+  "change": "SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US=0U",
+  "vector_bytes": 65536,
+  "full_chip_erase_run": {"kBps": 6.58, "status": "completed"},
+  "sector_identical_run": {"kBps": 10.0, "status": "not_comparable_identical_data"},
+  "comparison": {"previous_50us_mean_kBps": 5.9867, "delta_percent": 9.9},
+  "hardware": "主从均通过 D:\\/E:\\ MSC/DFU 升级；CMSIS-DAP 烧录完成"
+}

@@ -1,0 +1,20 @@
+{
+  "firmware": "1.0.40",
+  "vector_bytes": 65536,
+  "command": "pyocd flash --erase chip --base-address 0x08000000 -t stm32f103c8 test_64k.bin",
+  "baseline_kBps": 5.30,
+  "runs": [
+    {"kBps": 6.16, "status": "completed"},
+    {"kBps": 5.78, "status": "completed"},
+    {"kBps": 6.02, "status": "completed"},
+    {"kBps": null, "status": "probe_disconnected_during_run"}
+  ],
+  "diagnostics": {
+    "reset": "failed: ff",
+    "dump": "failed: ff after final run",
+    "rf_retransmit_rate": "not_available"
+  },
+  "mean_completed_kBps": 5.9867,
+  "software_change": "ACK turnaround delay 200 us -> 50 us",
+  "hardware_acceptance": "incomplete: probe disconnected during fourth run"
+}

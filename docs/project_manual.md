@@ -8,8 +8,8 @@ DAPLink-Wireless 使用两块相同硬件构成无线 CMSIS-DAP v2 调试器。�
 CMSIS-DAP v2 Bulk、CDC ACM 虚拟串口和 MSC 配置磁盘；`WIRELESS_SLAVE` 仅提供
 MSC 配置磁盘。
 
-当前状态：无线链路协议版本为 `v3`，
-无线帧头偏移 2 的协议字段为 `03`。旧无线固件不兼容。现有发布文档使用硬件版本 `v0.5`；
+当前状态：无线链路协议版本为 `v4`，
+无线帧头偏移 2 的协议字段为 `04`。旧无线固件不兼容。现有发布文档使用硬件版本 `v0.5`；
 EasyEDA 当前读取到的 `Board_V1.0` 与项目文档中的 `v0.5` 对应关系为 `待确认：`。
 
 项目只提供 CMSIS-DAP v2 Bulk 接口，不兼容 CMSIS-DAP v1 HID。
@@ -62,7 +62,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_release.ps1
 
 主机拥有无线链路的控制权，从机不主动修改 profile、频道或串口参数。串口数据
 和行参数使用递增序号、ACK、超时重传和重复帧抑制；无线单帧最多承载 110 字节。
-`DATA` 使用四槽窗口和累计 ACK，SWD Transfer 使用压缩 `SWD_BLOCK`。
+`DATA` 使用四槽窗口和累计 ACK。单个 SWD Transfer 使用压缩 `SWD_BLOCK`；
+请求环中已有 2 至 3 个可聚合命令时使用 `SWD_BURST`，并保留每个命令的响应边界。
 
 PC 打开 CDC ACM 虚拟串口时发送 `SET_LINE_CODING`。有线模式立即将参数应用到
 USART0；无线主机通过可靠控制帧同步给无线从机。因此不使用自动波特率探测。

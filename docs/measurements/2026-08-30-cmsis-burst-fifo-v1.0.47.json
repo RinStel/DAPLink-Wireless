@@ -1,0 +1,11 @@
+{
+  "firmware": "1.0.47",
+  "change": "CMSIS-DAP FIFO queued commands are converted to Burst when 2-3 eligible commands are ready",
+  "vector_bytes": 65536,
+  "result_kBps": 6.67,
+  "previous_kBps": 6.68,
+  "delta_percent": -0.1,
+  "status": "completed",
+  "conclusion": "实测没有形成可观 Burst 收益；pyOCD 烧录阶段仍未提供足够相邻可聚合命令，或双向 110 字节容量继续拒绝",
+  "diagnostics": "0x81 dump unavailable (ff)"
+}

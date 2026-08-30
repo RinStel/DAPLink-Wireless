@@ -1,0 +1,11 @@
+{
+  "firmware": "1.0.46",
+  "change": "CMSIS-DAP 4-slot raw command FIFO; USB submit no longer gated by cmsis_dap_busy",
+  "vector_bytes": 65536,
+  "result_kBps": 6.68,
+  "status": "completed",
+  "previous_kBps": 6.57,
+  "delta_percent": 1.7,
+  "diagnostics": "0x81 dump returned ff; no counters available",
+  "notes": "Build and 33 Python tests passed; full Burst gain not yet observed"
+}

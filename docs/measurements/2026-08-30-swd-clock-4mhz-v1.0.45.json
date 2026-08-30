@@ -1,0 +1,9 @@
+{
+  "firmware": "1.0.45",
+  "change": "TARGET_SWD_DEFAULT_CLOCK_HZ 100000 -> 4000000",
+  "vector_bytes": 65536,
+  "result_kBps": 6.57,
+  "status": "completed",
+  "comparison": {"v1.0.44_ack_zero_kBps": 6.58, "delta_percent": -0.2},
+  "conclusion": "吞吐几乎不变，说明 pyOCD 已显式设置 SWD 时钟或无线固定往返延迟占主导"
+}

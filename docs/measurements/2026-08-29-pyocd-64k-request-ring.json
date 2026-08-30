@@ -1,0 +1,19 @@
+{
+  "firmware": "1.0.35",
+  "result_kB_s": 4.84,
+  "request_ring_max_depth": 3,
+  "request_ring_depth_avg": 1.856958762886598,
+  "request_ring_depth_samples": 2328,
+  "usb_out_count": 2326,
+  "transfer_count": 1194,
+  "transfer_block_count": 1103,
+  "transfer_items": 20998,
+  "avg_transfer_items": 9.141488898563344,
+  "rf_tx_frames": 4724,
+  "rf_retransmits": 110,
+  "rf_retransmit_rate": 0.023285351397121085,
+  "ack_wait_us_avg": 1234.0326416050993,
+  "remote_roundtrip_us_avg": 1542.6333297211386,
+  "response_to_usb_in_us_avg": 739.1169195203005,
+  "conclusion": "Host request pipelining exists; bounded burst aggregation is feasible. This run had non-zero RF retransmissions and is not a clean throughput comparison against 1.0.34."
+}

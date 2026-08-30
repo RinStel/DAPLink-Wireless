@@ -17,6 +17,13 @@ Flash Load finished at 21:10:21
 
 pyOCD 仍可成功烧录。该结果只证明部分 CMSIS-DAP/SWD 路径可用，不能证明 Keil 的完整 Flash Algorithm 交互兼容。
 
+## 2026-08-30：SWD Burst v1 实测结论
+
+- `1.0.36` 至 `1.0.38` 已完成双板升级和三次 64 KiB 诊断烧录。
+- 最终拒绝分类为：解析 `0`、110 字节容量 `1993`、桥接状态 `0`。
+- `burst_tx_count` 始终为 `0`。持续写入和校验阶段的相邻大块无法同时满足请求与最坏响应不超过 110 字节。
+- 该结果不构成 Burst 性能提升。后续版本恢复 v3 单发，再单独测量 ACK 转向保护、RX 恢复和包长开销。
+
 ## 当前源码状态
 
 - 源码头文件版本为 `1.0.30`；运行中的实机版本尚未在本轮读取确认。
@@ -178,3 +185,29 @@ Flash Load finished at 22:09:36
 - 当前仅枚举到探针 `656C6C750015`，已执行单板刷写 `build/gcc/debug/daplink_slot_a.hex`。
 - pyOCD 报告擦除并写入 `49152 bytes / 48 pages`，速率 `4.00 kB/s`；同时报告 `0x08010000` 无内存区域和无效 XPSR 警告。
 - 第二块无线板未连接，双板更新、统计采集和吞吐验收均未完成。
+
+## 1.0.34 双板诊断与 64 KiB 基线
+
+- `D:\` 从机和 `E:\` 主机均通过 `.dwup` 更新到诊断 Release `1.0.34`，状态页确认版本和角色正确。
+- `DAP_VENDOR_TRACE (0x81)` 清零和三页读取成功。
+- 相同 `test_64k.bin` 实测 `5.30 kB/s`；65536 字节、64 页全部写入。
+- 统计到 2390 个 USB OUT、2371 个有数据 SWD 事务、21126 个 transfer item，平均每事务 8.95 项。
+- 无线发送 4742 帧、204373 字节，重传为 0；链路可靠性不是当前主要瓶颈。
+- 累计请求 ACK 等待 2.912 s（平均 1.232 ms），Remote 往返 4.084 s（平均 1.722 ms），响应到 USB IN 1.743 s（平均 0.735 ms）。三段合计约 8.74 s。
+- 原始 JSON：`docs/measurements/2026-08-29-pyocd-64k-diagnostics.json`。
+
+## 1.0.35 请求环深度实测
+
+- 双板更新到诊断 Release `1.0.35` 后，重复相同 64 KiB 烧录。
+- 请求环最大深度为 3，入队平均深度为 1.857；pyOCD 存在可用于 burst 的请求流水线。
+- 本次吞吐为 `4.84 kB/s`，无线重传 110 次、重传率 2.33%，因此不能把本次速率下降归因于请求环统计本身。
+- 原始 JSON：`docs/measurements/2026-08-29-pyocd-64k-request-ring.json`。
+
+### 后续诊断操作边界
+
+- 诊断 Release 构建产物位于 `build/gcc/diag-release3/`，由 STM32CubeCLT `arm-none-eabi-gcc` 和项目交叉编译工具链生成；配置必须包含 `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`。
+- 更新 DAP 自身必须使用 `tools/daplink_updater.py` 的 MSC/DFU 流程和 `daplink_wireless.dwup`，不得用 `pyocd flash` 写入 DAP 固件 HEX。
+
+### 刷写边界更正
+
+`pyocd flash` 通过 CMSIS-DAP 连接的是 DAP 后面的目标 MCU，不是 DAPLink 自身固件。诊断镜像不得使用该命令写入 DAP；DAP 自身必须通过 MSC/DFU 更新流程安装 `.dwup`。本轮曾误将 DAP 固件 HEX 作为 pyOCD 目标镜像执行，目标地址空间被擦写/部分写入；DAP 自身仍报告版本 `1.0.33`。后续不得继续对该目标 MCU 做实验性写入，应先按目标工程恢复并独立验证。

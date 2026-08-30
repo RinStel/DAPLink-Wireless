@@ -1,0 +1,10 @@
+{
+  "firmware": "1.0.48",
+  "change": "WIRELESS_SLAVE 2-slot pending SWD block FIFO",
+  "vector_bytes": 65536,
+  "result_kBps": 6.67,
+  "status": "completed",
+  "previous_kBps": 6.67,
+  "delta_percent": 0.0,
+  "conclusion": "Remote FIFO 已接入且单发回归稳定，但 Host 仍未同时发送多个 SWD block，因此没有吞吐收益"
+}
