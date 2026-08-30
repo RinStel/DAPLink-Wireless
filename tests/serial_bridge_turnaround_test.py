@@ -12,7 +12,7 @@ class SerialBridgeTurnaroundTest(unittest.TestCase):
         scheduler = (Path(__file__).resolve().parents[1] /
                      "firmware/app/serial_bridge_scheduler.h").read_text(
                          encoding="utf-8")
-        self.assertIn("SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US 200U", scheduler)
+        self.assertIn("SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US 0U", scheduler)
         self.assertIn("kind == TX_ACK", function)
         self.assertLess(function.index("board_delay_us"),
                         function.index("sx128x_start_tx"))

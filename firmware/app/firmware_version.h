@@ -20,11 +20,11 @@
 
 #define FIRMWARE_VERSION_MAJOR 1U
 #define FIRMWARE_VERSION_MINOR 0U
-#define FIRMWARE_VERSION_PATCH 33U
+#define FIRMWARE_VERSION_PATCH 44U
 
-#define FIRMWARE_VERSION_STRING "1.0.33"
-#define FIRMWARE_USB_BCD_DEVICE  0x0133U
+#define FIRMWARE_VERSION_STRING "1.0.44"
+#define FIRMWARE_USB_BCD_DEVICE  0x0144U
 /* Numeric ordering used by the bootloader; the display string is not parsed. */
-#define FIRMWARE_VERSION_CODE    1033U
+#define FIRMWARE_VERSION_CODE    1044U
 
 #endif

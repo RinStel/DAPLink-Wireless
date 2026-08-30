@@ -9,6 +9,72 @@
 static bool s_tunnel_request_active;
 static bool s_tunnel_response_ready;
 static uint8_t s_transaction_id;
+static uint8_t s_submit_count;
+static uint8_t s_submitted_transactions[SWD_TUNNEL_BURST_MAX_BLOCKS];
+
+bool swd_tunnel_burst_decode(const uint8_t *payload, uint8_t length,
+                             swd_tunnel_burst_t *burst)
+{
+    if ((payload == NULL) || (length != 3U) || (burst == NULL) ||
+        (payload[0] != SWD_TUNNEL_OP_BURST)) {
+        return false;
+    }
+    memset(burst, 0, sizeof(*burst));
+    burst->transaction_id = payload[1];
+    burst->count = 2U;
+    burst->blocks[0].transaction_id = 7U;
+    burst->blocks[0].count = 1U;
+    burst->blocks[0].transfers[0].request = 0x02U;
+    burst->blocks[1].transaction_id = 8U;
+    burst->blocks[1].count = 1U;
+    burst->blocks[1].transfers[0].request = 0x00U;
+    burst->blocks[1].transfers[0].data = 0x11223344U;
+    return true;
+}
+
+bool swd_tunnel_block_encoded_lengths(const swd_tunnel_block_t *block,
+                                      uint8_t *request_length,
+                                      uint8_t *worst_response_length)
+{
+    if ((block == NULL) || (request_length == NULL) ||
+        (worst_response_length == NULL) || (block->count != 1U)) {
+        return false;
+    }
+    *request_length = (block->transfers[0].request & 0x02U) != 0U
+                          ? 3U
+                          : 7U;
+    *worst_response_length = (block->transfers[0].request & 0x02U) != 0U
+                                 ? 8U
+                                 : 4U;
+    return true;
+}
+
+uint8_t swd_tunnel_burst_response_encode(
+    const swd_tunnel_burst_response_t *response, uint8_t *payload)
+{
+    if ((response == NULL) || (payload == NULL) ||
+        (response->count != 2U)) {
+        return 0U;
+    }
+    payload[0] = SWD_TUNNEL_OP_BURST;
+    payload[1] = response->transaction_id;
+    payload[2] = response->count;
+    return 3U;
+}
+
+bool swd_tunnel_burst_response_decode(
+    const uint8_t *payload, uint8_t length,
+    swd_tunnel_burst_response_t *response)
+{
+    if ((payload == NULL) || (response == NULL) || (length != 3U) ||
+        (payload[0] != SWD_TUNNEL_OP_BURST)) {
+        return false;
+    }
+    memset(response, 0, sizeof(*response));
+    response->transaction_id = payload[1];
+    response->count = payload[2];
+    return true;
+}
 
 bool swd_tunnel_decode_block(const uint8_t *payload, uint8_t length,
                              swd_tunnel_block_t *block)
@@ -31,6 +97,7 @@ bool swd_tunnel_submit_block(uint8_t transaction_id,
         return false;
     }
     s_transaction_id = transaction_id;
+    s_submitted_transactions[s_submit_count++] = transaction_id;
     s_tunnel_request_active = true;
     s_tunnel_response_ready = false;
     return true;
@@ -127,5 +194,39 @@ int main(void)
     assert(reply_length == 4U);
     assert(reply[0] == 7U);
     assert(!swd_bridge_service_busy());
+
+    {
+        const uint8_t burst_request[] = {
+            SWD_TUNNEL_OP_BURST, 0x70U, 2U
+        };
+
+        s_submit_count = 0U;
+        assert(swd_bridge_service_wireless_burst_request(
+            burst_request, sizeof(burst_request)));
+        assert(s_submit_count == 1U);
+        assert(s_submitted_transactions[0] == 7U);
+        swd_bridge_service_process();
+        assert(s_submit_count == 2U);
+        assert(s_submitted_transactions[1] == 8U);
+        assert(!swd_bridge_service_reply_take(reply, &reply_length));
+        swd_bridge_service_process();
+        assert(swd_bridge_service_reply_is_burst());
+        assert(swd_bridge_service_reply_take(reply, &reply_length));
+        assert(reply_length == 3U);
+        assert(reply[0] == SWD_TUNNEL_OP_BURST);
+        assert(reply[1] == 0x70U);
+
+        swd_bridge_service_reset();
+        s_submit_count = 0U;
+        assert(swd_bridge_service_wireless_burst_request(
+            burst_request, sizeof(burst_request)));
+        assert(s_submit_count == 1U);
+        assert(swd_bridge_service_wireless_abort(0x70U));
+        assert(s_submit_count == 1U);
+        assert(swd_bridge_service_reply_is_burst());
+        assert(swd_bridge_service_reply_take(reply, &reply_length));
+        assert(reply[0] == SWD_TUNNEL_OP_BURST);
+        assert(reply[1] == 0x70U);
+    }
     return 0;
 }

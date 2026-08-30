@@ -6,7 +6,20 @@
 
 #include "radio_protocol.h"
 
-#define SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US 200U
+#ifndef SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US
+#define SERIAL_BRIDGE_ACK_TURNAROUND_DELAY_US 0U
+#endif
+
+/* 实验性事务模式：关闭 SWD 请求确认后，主机直接等待端到端响应。
+ * 默认保持请求 ACK，以便保留现有可靠性行为。主从两端必须使用相同值。 */
+#ifndef SERIAL_BRIDGE_SWD_REQUEST_ACK_ENABLE
+#define SERIAL_BRIDGE_SWD_REQUEST_ACK_ENABLE 1
+#endif
+
+static inline bool serial_bridge_swd_request_ack_enabled(void)
+{
+    return SERIAL_BRIDGE_SWD_REQUEST_ACK_ENABLE != 0;
+}
 
 /* 每次 TX_DONE 后都先恢复 RX。ACK 后的 SWD 响应也必须等待对端重新开启
  * 接收，不能直接连续发送。 */
@@ -61,7 +74,8 @@ static inline uint32_t serial_bridge_reliable_ack_wait_ms(
     radio_frame_type_t type, uint32_t device_hash, uint8_t retries)
 {
     bool swd_request = (type == RADIO_FRAME_SWD_COMMAND) ||
-                       (type == RADIO_FRAME_SWD_BLOCK);
+                       (type == RADIO_FRAME_SWD_BLOCK) ||
+                       (type == RADIO_FRAME_SWD_BURST);
     uint32_t jitter_range = swd_request ? 8U : 41U;
     uint32_t base_wait_ms = swd_request ? 12U : 120U;
 
@@ -75,10 +89,12 @@ static inline bool serial_bridge_next_swd_request_confirms_response(
 {
     bool pending_is_response =
         (pending_type == RADIO_FRAME_SWD_COMMAND_RESPONSE) ||
-        (pending_type == RADIO_FRAME_SWD_BLOCK_RESPONSE);
+        (pending_type == RADIO_FRAME_SWD_BLOCK_RESPONSE) ||
+        (pending_type == RADIO_FRAME_SWD_BURST_RESPONSE);
     bool incoming_is_request =
         (incoming_type == RADIO_FRAME_SWD_COMMAND) ||
-        (incoming_type == RADIO_FRAME_SWD_BLOCK);
+        (incoming_type == RADIO_FRAME_SWD_BLOCK) ||
+        (incoming_type == RADIO_FRAME_SWD_BURST);
     return pending_is_response && incoming_is_request;
 }
 

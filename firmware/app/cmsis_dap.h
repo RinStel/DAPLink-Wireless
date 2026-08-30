@@ -24,10 +24,18 @@
 #define CMSIS_DAP_PACKET_SIZE 64U
 /* DAP_Info(0xFE) 对主机公布的请求/响应流水线深度。 */
 #define CMSIS_DAP_PACKET_COUNT 4U
+#define CMSIS_DAP_BURST_MAX_COMMANDS 3U
+#ifndef CMSIS_DAP_SWD_BURST_ENABLE
+#define CMSIS_DAP_SWD_BURST_ENABLE 0
+#endif
 
 /* submit 会复制包；process 推进异步桥接操作。 */
 void cmsis_dap_init(void);
 bool cmsis_dap_submit(const uint8_t *request, uint8_t length);
+bool cmsis_dap_burst_eligible(const uint8_t *request, uint8_t length);
+bool cmsis_dap_submit_burst(const uint8_t *const requests[],
+                            const uint8_t lengths[], uint8_t count);
+uint8_t cmsis_dap_response_pending_count(void);
 /* Abort 为带外命令，不生成 CMSIS-DAP 响应包。 */
 void cmsis_dap_abort(void);
 void cmsis_dap_process(void);

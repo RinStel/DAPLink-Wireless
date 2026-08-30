@@ -22,6 +22,7 @@ int main(void)
     /* 固定 profile 使用紧凑 ACK，并跳过不参与速率决策的 packet status。 */
     assert(serial_bridge_request_ack_required(RADIO_FRAME_SWD_COMMAND));
     assert(serial_bridge_request_ack_required(RADIO_FRAME_SWD_BLOCK));
+    assert(serial_bridge_request_ack_required(RADIO_FRAME_SWD_BURST));
     assert(serial_bridge_request_ack_required(RADIO_FRAME_DATA));
     assert(serial_bridge_ack_compact(
         RADIO_FRAME_SWD_BLOCK_RESPONSE, false));
@@ -30,13 +31,17 @@ int main(void)
     assert(serial_bridge_ack_compact(RADIO_FRAME_DATA, false));
     assert(serial_bridge_packet_status_required(true));
     assert(!serial_bridge_packet_status_required(false));
-    assert(serial_bridge_ack_turnaround_delay_us() == 200U);
+    assert(serial_bridge_ack_turnaround_delay_us() == 50U);
 
     /* 下一条 SWD 请求隐式确认上一条响应，避免显式 ACK 丢失阻塞可靠槽。 */
     assert(serial_bridge_next_swd_request_confirms_response(
         RADIO_FRAME_SWD_BLOCK_RESPONSE, RADIO_FRAME_SWD_BLOCK));
     assert(serial_bridge_next_swd_request_confirms_response(
         RADIO_FRAME_SWD_COMMAND_RESPONSE, RADIO_FRAME_SWD_COMMAND));
+    assert(serial_bridge_next_swd_request_confirms_response(
+        RADIO_FRAME_SWD_BURST_RESPONSE, RADIO_FRAME_SWD_BURST));
+    assert(serial_bridge_next_swd_request_confirms_response(
+        RADIO_FRAME_SWD_BURST_RESPONSE, RADIO_FRAME_SWD_BLOCK));
     assert(!serial_bridge_next_swd_request_confirms_response(
         RADIO_FRAME_SWD_BLOCK, RADIO_FRAME_SWD_BLOCK));
     assert(!serial_bridge_next_swd_request_confirms_response(
@@ -49,6 +54,8 @@ int main(void)
                RADIO_FRAME_SWD_COMMAND, 0x1234U, 0U) <= 19U);
     assert(serial_bridge_reliable_ack_wait_ms(
                RADIO_FRAME_SWD_BLOCK, 0x1234U, 3U) <= 19U);
+    assert(serial_bridge_reliable_ack_wait_ms(
+               RADIO_FRAME_SWD_BURST, 0x1234U, 3U) <= 19U);
     assert(serial_bridge_reliable_ack_wait_ms(
                RADIO_FRAME_PROFILE_SWITCH, 0x1234U, 0U) >= 120U);
     assert(serial_bridge_reliable_ack_wait_ms(

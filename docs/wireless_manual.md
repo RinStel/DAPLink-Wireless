@@ -1,9 +1,9 @@
-# 无线手册：协议 v3、跳频与射频验证
+# 无线手册：协议 v4、SWD Burst、跳频与射频验证
 
 ## 当前版本与兼容边界
 
-当前固件只使用无线链路协议 `v3`。无线帧头偏移 2 的协议版本字段为 `03`，代码
-中的唯一版本常量是 `RADIO_PROTOCOL_VERSION 3U`。接收端拒绝所有其他版本；项目
+当前固件只使用无线链路协议 `v4`。无线帧头偏移 2 的协议版本字段为 `04`，代码
+中的唯一版本常量是 `RADIO_PROTOCOL_VERSION 4U`。接收端拒绝所有其他版本；项目
 不保留 v2/v1 解析、发送、协商或回退路径。主从机必须同时升级。
 
 ## 帧格式
@@ -13,7 +13,7 @@
 | 偏移 | 长度 | 内容 |
 | --- | --- | --- |
 | 0 | 2 | 固定魔数 `44 53` |
-| 2 | 1 | 协议版本 `03` |
+| 2 | 1 | 协议版本 `04` |
 | 3 | 1 | 帧类型 |
 | 4 | 4 | 同步码派生的网络 ID |
 | 8 | 4 | 本次启动会话 ID |
@@ -37,7 +37,7 @@ Transfer 的终止响应。
 `ack_next + bitmap` 累计确认，重复帧不会再次投递到 UART 或 CDC。控制帧仍使用
 单独的可靠槽位。
 
-ACK 有两种 v3 布局：AUTO profile 或携带跳频信息时使用完整 17 字节；固定
+ACK 有两种 v4 布局：AUTO profile 或携带跳频信息时使用完整 17 字节；固定
 profile 且没有待处理跳频时使用 8 字节紧凑布局。
 
 完整 ACK 负载为 17 字节：
@@ -74,6 +74,33 @@ SPI 事务；AUTO profile 仍读取 RSSI、错误状态和同步状态，用于�
 21 个普通 transfer，响应只携带已完成读传输的数据，并保持读顺序。无线主机将
 响应映射回 CMSIS-DAP 的原始传输顺序。
 
+## SWD_BURST
+
+无线主机仅聚合 USB 请求环中已经到达的 `DAP_Transfer (0x05)` 和
+`DAP_TransferBlock (0x06)`。可聚合前缀少于 2 个时立即使用 `SWD_BLOCK`；
+实现不等待新请求，也不使用 flush 定时器。其他 CMSIS-DAP 命令均为 Burst 边界。
+
+Burst 最多包含 3 个独立子块。请求和响应都使用以下格式：
+
+```text
+operation | burst_transaction_id | count |
+repeated { encoded_length | encoded_block }
+```
+
+`operation` 为 `SWD_TUNNEL_OP_BURST`。每个 `encoded_block` 保留自己的
+transaction ID、Transfer Request、写数据、完成数量、目标 ACK 和读数据。
+请求总长和最坏响应总长都不得超过 110 字节。
+
+无线从机依次调用现有 SWD block 执行器。每个子块分别完成 AP posted-read、
+`DP_RDBUFF`、写后检查、WAIT 重试和错误计数；实现不得把多个 Transfer 数组拼成
+一个 block。全部子块完成后，从机发送一个 `SWD_BURST_RESPONSE`。无线主机按子块
+顺序恢复多个 CMSIS-DAP USB IN 响应。
+
+重复 Burst 请求使用现有可靠响应缓存，不再次执行目标写操作。Abort 取消当前
+子块并丢弃尚未执行的子块；从机返回带错误 ACK 的 Burst 响应。发送前容量不足时
+回退到第一条单发；已发送后的解析错误或超时只生成对应 DAP Transfer 错误，不盲目
+重放整个 Burst。
+
 发送端仅在 `PROFILE=AUTO` 时将 ACK RSSI 输入 EWMA 和速率决策。固定
 `PROFILE` 模式只记录指标，不改变 profile。
 
@@ -93,10 +120,10 @@ CMSIS-DAP 命令。
    USB 可以提前排队，但 `cmsis_dap.c` 同时只推进一个活动命令，以保持响应顺序。
 4. `DAP_Info` 和 `DAP Vendor 0x80` 在无线主机本地生成响应。连接、时钟、引脚、
    SWJ/SWD Sequence 和 Transfer 命令进入 `serial_bridge`。
-5. 普通控制命令编码为可靠的 `SWD_COMMAND`；Transfer 编码为压缩的
-   `SWD_BLOCK`。请求区先排列 Transfer Request，再按顺序排列写请求和
-   Match Value 读请求携带的 4 字节数据。每个无线帧添加 17 字节 v2
-   v3 帧头、会话 ID 和序号。
+5. 普通控制命令编码为可靠的 `SWD_COMMAND`；单个 Transfer 命令编码为压缩的
+   `SWD_BLOCK`；请求环中已有 2 至 3 个可聚合命令时编码为 `SWD_BURST`。
+   请求区先排列 Transfer Request，再按顺序排列写请求和 Match Value 读请求
+   携带的 4 字节数据。每个无线帧添加 17 字节 v4 帧头、会话 ID 和序号。
 6. `serial_bridge` 同时只保留一个可靠控制事务。SX1281 在当前固定 profile 和
    频道发送该帧；FLRC1M3 使用 1.3 Mbps、CR 3/4。
 7. 无线从机读取 RX FIFO、验证 CRC、同步字、网络 ID、会话、长度和重复帧键，

@@ -175,12 +175,101 @@ int main(void)
     swd_tunnel_response_t response;
     swd_tunnel_block_t block;
     swd_tunnel_block_response_t block_response;
+    swd_tunnel_burst_t burst;
+    swd_tunnel_burst_t decoded_burst;
+    swd_tunnel_burst_response_t burst_response;
+    swd_tunnel_burst_response_t decoded_burst_response;
     uint32_t block_data[SWD_TUNNEL_MAX_BLOCK_TRANSFERS] = {
         0x01020304U, 0xA0B0C0D0U
     };
     const uint8_t raw_response[] = {
         SWD_TUNNEL_OP_SWD_SEQUENCE, 7U, 2U, 0U, 0U, 0xA5U
     };
+
+    {
+        swd_tunnel_transfer_t first_transfers[1] = {
+            {.request = 0x02U, .data = 0U}
+        };
+        swd_tunnel_transfer_t second_transfers[1] = {
+            {.request = 0x01U, .data = 0x11223344U}
+        };
+
+        memset(&burst, 0, sizeof(burst));
+        burst.transaction_id = 0x71U;
+        burst.count = 2U;
+        burst.blocks[0].transaction_id = 0x21U;
+        burst.blocks[0].count = 1U;
+        burst.blocks[0].transfers[0] = first_transfers[0];
+        burst.blocks[1].transaction_id = 0x22U;
+        burst.blocks[1].count = 1U;
+        burst.blocks[1].transfers[0] = second_transfers[0];
+
+        length = swd_tunnel_burst_encode(&burst, payload);
+        assert(length == 15U);
+        assert(payload[0] == SWD_TUNNEL_OP_BURST);
+        assert(swd_tunnel_burst_decode(payload, length, &decoded_burst));
+        assert(decoded_burst.transaction_id == 0x71U);
+        assert(decoded_burst.count == 2U);
+        assert(decoded_burst.blocks[0].transaction_id == 0x21U);
+        assert(decoded_burst.blocks[0].count == 1U);
+        assert(decoded_burst.blocks[0].transfers[0].request == 0x02U);
+        assert(decoded_burst.blocks[1].transaction_id == 0x22U);
+        assert(decoded_burst.blocks[1].count == 1U);
+        assert(decoded_burst.blocks[1].transfers[0].request == 0x01U);
+        assert(decoded_burst.blocks[1].transfers[0].data == 0x11223344U);
+    }
+
+    {
+        uint32_t first_data[1] = {0x10203040U};
+        uint32_t second_data[2] = {0x55667788U, 0xAABBCCDDU};
+
+        memset(&burst_response, 0, sizeof(burst_response));
+        burst_response.transaction_id = 0x71U;
+        burst_response.count = 2U;
+        burst_response.responses[0].transaction_id = 0x21U;
+        burst_response.responses[0].completed = 1U;
+        burst_response.responses[0].ack = TARGET_SWD_ACK_OK;
+        burst_response.responses[0].read_count = 1U;
+        burst_response.responses[0].data[0] = first_data[0];
+        burst_response.responses[1].transaction_id = 0x22U;
+        burst_response.responses[1].completed = 2U;
+        burst_response.responses[1].ack = TARGET_SWD_ACK_FAULT;
+        burst_response.responses[1].read_count = 2U;
+        burst_response.responses[1].data[0] = second_data[0];
+        burst_response.responses[1].data[1] = second_data[1];
+
+        length = swd_tunnel_burst_response_encode(&burst_response, payload);
+        assert(length == 25U);
+        assert(swd_tunnel_burst_response_decode(
+            payload, length, &decoded_burst_response));
+        assert(decoded_burst_response.transaction_id == 0x71U);
+        assert(decoded_burst_response.count == 2U);
+        assert(decoded_burst_response.responses[0].data[0] == first_data[0]);
+        assert(decoded_burst_response.responses[1].ack ==
+               TARGET_SWD_ACK_FAULT);
+        assert(decoded_burst_response.responses[1].data[1] == second_data[1]);
+        assert(!swd_tunnel_burst_response_decode(
+            payload, (uint8_t)(length - 1U), &decoded_burst_response));
+        payload[2] = 3U;
+        assert(!swd_tunnel_burst_response_decode(
+            payload, length, &decoded_burst_response));
+    }
+
+    {
+        uint8_t index;
+
+        memset(&burst_response, 0, sizeof(burst_response));
+        burst_response.transaction_id = 0x72U;
+        burst_response.count = 3U;
+        for (index = 0U; index < 3U; ++index) {
+            burst_response.responses[index].transaction_id = index;
+            burst_response.responses[index].completed = 9U;
+            burst_response.responses[index].ack = TARGET_SWD_ACK_OK;
+            burst_response.responses[index].read_count = 9U;
+        }
+        assert(swd_tunnel_burst_response_encode(
+                   &burst_response, payload) == 0U);
+    }
 
     {
         swd_tunnel_transfer_t block_transfers[3] = {

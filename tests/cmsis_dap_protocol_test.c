@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "cmsis_dap.h"
+#include "dap_diagnostics.h"
 #include "firmware_version.h"
 #include "serial_bridge.h"
 #include "target_swd.h"
@@ -32,6 +33,9 @@ static swd_tunnel_transfer_t s_captured_transfers[16];
 static uint8_t s_captured_transfer_count;
 static uint8_t s_sequence_request[62];
 static uint8_t s_sequence_length;
+static swd_tunnel_burst_t s_captured_burst;
+static swd_tunnel_burst_response_t s_bridge_burst_response;
+static bool s_burst_response_available;
 
 uint32_t board_millis(void)
 {
@@ -149,6 +153,49 @@ bool serial_bridge_swd_transfers(
     return true;
 }
 
+bool serial_bridge_swd_burst(const swd_tunnel_burst_t *burst)
+{
+    assert(burst != NULL);
+    s_captured_burst = *burst;
+    s_transaction = burst->transaction_id;
+    return true;
+}
+
+bool serial_bridge_swd_burst_response_take(
+    swd_tunnel_burst_response_t *response)
+{
+    if ((response == NULL) || !s_burst_response_available) {
+        return false;
+    }
+    *response = s_bridge_burst_response;
+    s_burst_response_available = false;
+    return true;
+}
+
+bool swd_tunnel_block_encoded_lengths(const swd_tunnel_block_t *block,
+                                      uint8_t *request_length,
+                                      uint8_t *worst_response_length)
+{
+    uint8_t index;
+    uint8_t writes = 0U;
+    uint8_t reads = 0U;
+
+    if ((block == NULL) || (request_length == NULL) ||
+        (worst_response_length == NULL) || (block->count == 0U)) {
+        return false;
+    }
+    for (index = 0U; index < block->count; ++index) {
+        if ((block->transfers[index].request & 0x02U) != 0U) {
+            ++reads;
+        } else {
+            ++writes;
+        }
+    }
+    *request_length = (uint8_t)(2U + block->count + writes * 4U);
+    *worst_response_length = (uint8_t)(4U + reads * 4U);
+    return true;
+}
+
 void serial_bridge_swd_cancel(uint8_t transaction_id)
 {
     assert(transaction_id == s_transaction);
@@ -218,6 +265,34 @@ int main(void)
     uint8_t response[CMSIS_DAP_PACKET_SIZE];
     uint8_t length;
 
+    {
+        static const uint8_t boundaries[] = {
+            0x00U, 0x01U, 0x02U, 0x03U, 0x04U, 0x07U, 0x08U,
+            0x09U, 0x0AU, 0x10U, 0x11U, 0x12U, 0x13U, 0x1DU,
+            0x7EU, 0x7FU, 0x80U, 0x81U
+        };
+        const uint8_t transfer[] = {0x05U, 0U, 1U, 0x02U};
+        const uint8_t transfer_block[] = {0x06U, 0U, 1U, 0U, 0x02U};
+        const uint8_t zero_transfer[] = {0x05U, 0U, 0U};
+        uint8_t padded_transfer[CMSIS_DAP_PACKET_SIZE] = {
+            0x05U, 0U, 1U, 0x02U
+        };
+        uint8_t index;
+
+        assert(cmsis_dap_burst_eligible(transfer, sizeof(transfer)));
+        assert(cmsis_dap_burst_eligible(
+            transfer_block, sizeof(transfer_block)));
+        assert(cmsis_dap_burst_eligible(
+            padded_transfer, sizeof(padded_transfer)));
+        assert(!cmsis_dap_burst_eligible(transfer, 3U));
+        assert(!cmsis_dap_burst_eligible(zero_transfer,
+                                         sizeof(zero_transfer)));
+        for (index = 0U; index < sizeof(boundaries); ++index) {
+            uint8_t boundary[] = {boundaries[index]};
+            assert(!cmsis_dap_burst_eligible(boundary, sizeof(boundary)));
+        }
+    }
+
     cmsis_dap_init();
 
     request[0] = DAP_RESET_TARGET;
@@ -283,6 +358,33 @@ int main(void)
     assert(response[0] == DAP_VENDOR_TRACE && response[1] == 1U &&
            response[2] == 0U);
 
+    dap_diagnostics_burst_queued(2U, 20U);
+    dap_diagnostics_burst_response_bytes(30U);
+    dap_diagnostics_single_swd();
+    dap_diagnostics_burst_fallback();
+    dap_diagnostics_burst_parse_error();
+    request[1] = 1U;
+    request[2] = 3U;
+    assert(cmsis_dap_submit(request, 3U));
+    length = response_take(response);
+    assert(length == 64U);
+    assert(response[4] == 1U);  /* burst_tx_count */
+    assert(response[8] == 2U);  /* burst_command_total */
+    assert(response[12] == 2U); /* burst_max_commands */
+    assert(response[20] == 1U); /* histogram[2] */
+    assert(response[28] == 1U); /* single_swd_tx_count */
+    assert(response[40] == 1U); /* fallback_count */
+    assert(response[44] == 1U); /* parse_error_count */
+
+    dap_diagnostics_request_ring_depth(1U);
+    dap_diagnostics_request_ring_depth(3U);
+    request[1] = 1U;
+    request[2] = 2U;
+    assert(cmsis_dap_submit(request, 3U));
+    length = response_take(response);
+    assert(length == 64U);
+    assert(response[16] == 3U); /* page 2 value[3]: max depth */
+
     request[1] = 1U;
     request[2] = 0U;
     assert(cmsis_dap_submit(request, 3U));
@@ -333,6 +435,50 @@ int main(void)
     bridge_complete(SWD_TUNNEL_OP_CONNECT, 0U, TARGET_SWD_ACK_OK);
     assert(response_take(response) == 2U);
     assert(response[1] == 1U);
+
+    {
+        const uint8_t first[] = {DAP_TRANSFER, 0U, 1U, 0x02U};
+        const uint8_t second[] = {
+            DAP_TRANSFER_BLOCK, 0U, 1U, 0U, 0x00U,
+            0x44U, 0x33U, 0x22U, 0x11U
+        };
+        const uint8_t *requests[] = {first, second};
+        const uint8_t lengths[] = {sizeof(first), sizeof(second)};
+
+        assert(cmsis_dap_submit_burst(requests, lengths, 2U));
+        assert(s_captured_burst.count == 2U);
+        assert(s_captured_burst.blocks[0].count == 1U);
+        assert(s_captured_burst.blocks[0].transfers[0].request == 0x02U);
+        assert(s_captured_burst.blocks[1].count == 1U);
+        assert(s_captured_burst.blocks[1].transfers[0].request == 0x00U);
+        assert(s_captured_burst.blocks[1].transfers[0].data ==
+               0x11223344U);
+
+        memset(&s_bridge_burst_response, 0,
+               sizeof(s_bridge_burst_response));
+        s_bridge_burst_response.transaction_id =
+            s_captured_burst.transaction_id;
+        s_bridge_burst_response.count = 2U;
+        s_bridge_burst_response.responses[0].transaction_id =
+            s_captured_burst.blocks[0].transaction_id;
+        s_bridge_burst_response.responses[0].completed = 1U;
+        s_bridge_burst_response.responses[0].ack = TARGET_SWD_ACK_OK;
+        s_bridge_burst_response.responses[0].read_count = 1U;
+        s_bridge_burst_response.responses[0].data[0] = 0x78563412U;
+        s_bridge_burst_response.responses[1].transaction_id =
+            s_captured_burst.blocks[1].transaction_id;
+        s_bridge_burst_response.responses[1].completed = 1U;
+        s_bridge_burst_response.responses[1].ack = TARGET_SWD_ACK_OK;
+        s_burst_response_available = true;
+        cmsis_dap_process();
+        assert(cmsis_dap_response_pending_count() == 2U);
+        assert(response_take(response) == 7U);
+        assert(response[0] == DAP_TRANSFER);
+        assert(response[3] == 0x12U && response[6] == 0x78U);
+        assert(response_take(response) == 4U);
+        assert(response[0] == DAP_TRANSFER_BLOCK);
+        assert(response[1] == 1U && response[3] == TARGET_SWD_ACK_OK);
+    }
 
     memset(request, 0, sizeof(request));
     request[0] = DAP_TRANSFER_CONFIGURE;

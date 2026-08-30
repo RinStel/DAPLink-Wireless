@@ -32,6 +32,7 @@ class SerialBridgeReliabilityTest(unittest.TestCase):
         end = source.index("    valid_rx_mark();", start)
         duplicate_handler = source[start:end]
         self.assertIn("type == RADIO_FRAME_SWD_BLOCK", duplicate_handler)
+        self.assertIn("type == RADIO_FRAME_SWD_BURST", duplicate_handler)
         self.assertIn("swd_bridge_service_repeat_request();",
                       duplicate_handler)
 

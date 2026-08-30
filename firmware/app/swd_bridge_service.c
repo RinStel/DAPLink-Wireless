@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "target_swd.h"
+
 typedef enum {
     SWD_OWNER_NONE = 0,
     SWD_OWNER_WIRED_HOST,
@@ -43,8 +45,37 @@ static uint32_t s_cancellations;
 static uint32_t s_stale_responses;
 static bool s_block_active;
 static bool s_reply_block;
+static bool s_reply_burst;
 static uint8_t s_block_count;
 static swd_tunnel_transfer_t s_block_transfers[SWD_TUNNEL_MAX_BLOCK_TRANSFERS];
+static bool s_burst_active;
+static uint8_t s_burst_index;
+static swd_tunnel_burst_t s_burst;
+static swd_tunnel_burst_response_t s_burst_response;
+static bool s_burst_response_ready;
+
+static bool block_result_store(
+    const swd_tunnel_block_t *block,
+    const swd_tunnel_response_t *result,
+    swd_tunnel_block_response_t *response)
+{
+    uint8_t index;
+
+    if ((block == NULL) || (result == NULL) || (response == NULL) ||
+        (result->completed > block->count)) {
+        return false;
+    }
+    memset(response, 0, sizeof(*response));
+    response->transaction_id = result->transaction_id;
+    response->completed = result->completed;
+    response->ack = result->ack;
+    for (index = 0U; index < result->completed; ++index) {
+        if ((block->transfers[index].request & 0x02U) != 0U) {
+            response->data[response->read_count++] = result->data[index];
+        }
+    }
+    return true;
+}
 
 void swd_bridge_service_init(void)
 {
@@ -63,7 +94,11 @@ void swd_bridge_service_reset(void)
     s_reply_length = 0U;
     s_block_active = false;
     s_reply_block = false;
+    s_reply_burst = false;
     s_block_count = 0U;
+    s_burst_active = false;
+    s_burst_index = 0U;
+    s_burst_response_ready = false;
 }
 
 void swd_bridge_service_process(void)
@@ -80,7 +115,37 @@ void swd_bridge_service_process(void)
         return;
     }
     if (s_owner == SWD_OWNER_WIRELESS_SLAVE) {
-        if (s_block_active) {
+        if (s_burst_active) {
+            swd_tunnel_response_t block_result;
+            swd_tunnel_block_t *block = &s_burst.blocks[s_burst_index];
+
+            if (!swd_tunnel_decode_response(payload, length, &block_result) ||
+                (block_result.transaction_id != block->transaction_id) ||
+                !block_result_store(
+                    block, &block_result,
+                    &s_burst_response.responses[s_burst_index])) {
+                s_owner = SWD_OWNER_NONE;
+                s_burst_active = false;
+                return;
+            }
+            ++s_burst_index;
+            if (s_burst_index < s_burst.count) {
+                block = &s_burst.blocks[s_burst_index];
+                if (!swd_tunnel_submit_block(
+                        block->transaction_id, block->transfers,
+                        block->count)) {
+                    s_owner = SWD_OWNER_NONE;
+                    s_burst_active = false;
+                }
+                return;
+            }
+            s_reply_length = swd_tunnel_burst_response_encode(
+                &s_burst_response, s_reply);
+            s_reply_burst = s_reply_length != 0U;
+            s_reply_block = false;
+            s_reply_ready = s_reply_burst;
+            s_burst_active = false;
+        } else if (s_block_active) {
             swd_tunnel_response_t block_result;
             uint32_t reads[SWD_TUNNEL_MAX_BLOCK_TRANSFERS];
             uint8_t read_count = 0U;
@@ -100,12 +165,16 @@ void swd_bridge_service_process(void)
                 block_result.ack,
                 reads, read_count, s_reply);
             s_reply_block = true;
+            s_reply_burst = false;
         } else {
         memcpy(s_reply, payload, length);
         s_reply_length = length;
         s_reply_block = false;
+        s_reply_burst = false;
         }
-        s_reply_ready = true;
+        if (!s_reply_burst) {
+            s_reply_ready = true;
+        }
     } else if ((s_owner == SWD_OWNER_WIRED_HOST) &&
                swd_tunnel_decode_response(payload, length, &s_response)) {
         s_response_ready = true;
@@ -168,6 +237,22 @@ bool swd_bridge_service_begin_block(device_mode_t mode, uint8_t transaction_id,
     return true;
 }
 
+bool swd_bridge_service_begin_burst(device_mode_t mode,
+                                    const swd_tunnel_burst_t *burst)
+{
+    if ((mode != DEVICE_MODE_WIRELESS_HOST) || (burst == NULL) ||
+        (burst->count < 2U) ||
+        (burst->count > SWD_TUNNEL_BURST_MAX_BLOCKS) ||
+        s_request_active || (s_owner != SWD_OWNER_NONE)) {
+        return false;
+    }
+    s_expected_transaction = burst->transaction_id;
+    s_request_active = true;
+    s_response_ready = false;
+    s_burst_response_ready = false;
+    return true;
+}
+
 bool swd_bridge_service_wireless_command(const uint8_t *payload,
                                          uint8_t length)
 {
@@ -201,6 +286,49 @@ bool swd_bridge_service_wireless_block_request(const uint8_t *payload,
     s_block_count = block.count;
     s_block_active = true;
     s_expected_transaction = block.transaction_id;
+    s_owner = SWD_OWNER_WIRELESS_SLAVE;
+    return true;
+}
+
+bool swd_bridge_service_wireless_burst_request(const uint8_t *payload,
+                                               uint8_t length)
+{
+    uint8_t index;
+    uint16_t worst_response_length = 3U;
+    swd_tunnel_block_t *first;
+
+    if ((s_owner != SWD_OWNER_NONE) || s_reply_ready ||
+        !swd_tunnel_burst_decode(payload, length, &s_burst)) {
+        return false;
+    }
+    for (index = 0U; index < s_burst.count; ++index) {
+        uint8_t request_length;
+        uint8_t response_length;
+
+        if (!swd_tunnel_block_encoded_lengths(
+                &s_burst.blocks[index], &request_length,
+                &response_length)) {
+            return false;
+        }
+        worst_response_length = (uint16_t)(
+            worst_response_length + 1U + response_length);
+        if (worst_response_length > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) {
+            return false;
+        }
+    }
+    first = &s_burst.blocks[0];
+    if (!swd_tunnel_submit_block(first->transaction_id, first->transfers,
+                                 first->count)) {
+        return false;
+    }
+    memset(&s_burst_response, 0, sizeof(s_burst_response));
+    s_burst_response.transaction_id = s_burst.transaction_id;
+    s_burst_response.count = s_burst.count;
+    s_burst_index = 0U;
+    s_burst_active = true;
+    s_block_active = false;
+    s_expected_transaction = s_burst.transaction_id;
+    s_reply_burst = false;
     s_owner = SWD_OWNER_WIRELESS_SLAVE;
     return true;
 }
@@ -264,16 +392,55 @@ bool swd_bridge_service_wireless_block_response(const uint8_t *payload,
     return true;
 }
 
+bool swd_bridge_service_wireless_burst_response(const uint8_t *payload,
+                                                uint8_t length)
+{
+    swd_tunnel_burst_response_t response;
+
+    if (!swd_tunnel_burst_response_decode(payload, length, &response)) {
+        return false;
+    }
+    if (!s_request_active ||
+        (response.transaction_id != s_expected_transaction)) {
+        ++s_stale_responses;
+        return true;
+    }
+    s_burst_response = response;
+    s_burst_response_ready = true;
+    s_request_active = false;
+    return true;
+}
+
 bool swd_bridge_service_wireless_abort(uint8_t transaction_id)
 {
+    uint8_t index;
+
     if ((s_owner != SWD_OWNER_WIRELESS_SLAVE) ||
         (transaction_id != s_expected_transaction)) {
         return false;
     }
     swd_tunnel_cancel();
     s_owner = SWD_OWNER_NONE;
-    s_reply_ready = false;
-    s_reply_length = 0U;
+    if (s_burst_active) {
+        for (index = s_burst_index; index < s_burst.count; ++index) {
+            swd_tunnel_block_response_t *response =
+                &s_burst_response.responses[index];
+
+            memset(response, 0, sizeof(*response));
+            response->transaction_id =
+                s_burst.blocks[index].transaction_id;
+            response->ack = TARGET_SWD_ACK_PROTOCOL;
+        }
+        s_reply_length = swd_tunnel_burst_response_encode(
+            &s_burst_response, s_reply);
+        s_reply_ready = s_reply_length != 0U;
+        s_reply_burst = s_reply_ready;
+        s_reply_block = false;
+    } else {
+        s_reply_ready = false;
+        s_reply_length = 0U;
+    }
+    s_burst_active = false;
     s_block_active = false;
     s_block_count = 0U;
     ++s_cancellations;
@@ -297,6 +464,11 @@ bool swd_bridge_service_reply_is_block(void)
     return s_reply_block;
 }
 
+bool swd_bridge_service_reply_is_burst(void)
+{
+    return s_reply_burst;
+}
+
 bool swd_bridge_service_response_take(swd_tunnel_response_t *response)
 {
     if ((response == NULL) || !s_response_ready) {
@@ -307,6 +479,17 @@ bool swd_bridge_service_response_take(swd_tunnel_response_t *response)
     s_block_active = false;
     s_reply_block = false;
     s_block_count = 0U;
+    return true;
+}
+
+bool swd_bridge_service_burst_response_take(
+    swd_tunnel_burst_response_t *response)
+{
+    if ((response == NULL) || !s_burst_response_ready) {
+        return false;
+    }
+    *response = s_burst_response;
+    s_burst_response_ready = false;
     return true;
 }
 
@@ -344,7 +527,7 @@ bool swd_bridge_service_request_active(void)
 bool swd_bridge_service_busy(void)
 {
     return s_request_active || s_response_ready || s_reply_ready ||
-           (s_owner != SWD_OWNER_NONE);
+           s_burst_response_ready || (s_owner != SWD_OWNER_NONE);
 }
 
 uint32_t swd_bridge_service_cancellations(void)

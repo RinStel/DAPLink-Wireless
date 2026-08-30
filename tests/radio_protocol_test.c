@@ -75,6 +75,17 @@ int main(void)
     assert(view.type == RADIO_FRAME_SWD_ABORT);
     assert(view.payload_length == 1U);
 
+    length = radio_protocol_build(
+        frame, RADIO_FRAME_SWD_BURST, 0x12345678U, 1U, 10U,
+        payload, sizeof(payload));
+    assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
+    assert(view.type == RADIO_FRAME_SWD_BURST);
+    length = radio_protocol_build(
+        frame, RADIO_FRAME_SWD_BURST_RESPONSE, 0x12345678U, 1U, 11U,
+        payload, sizeof(payload));
+    assert(radio_protocol_parse(frame, length, 0x12345678U, &view));
+    assert(view.type == RADIO_FRAME_SWD_BURST_RESPONSE);
+
     memset(&ack, 0, sizeof(ack));
     ack.ack_next = 0x10203040U;
     ack.bitmap = 0x0000000DU;

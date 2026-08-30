@@ -282,6 +282,13 @@ static bool data_frame_transmit(void)
     return false;
 }
 
+static bool swd_request_frame_type(bridge_frame_type_t type)
+{
+    return (type == BRIDGE_FRAME_SWD_COMMAND) ||
+           (type == RADIO_FRAME_SWD_BLOCK) ||
+           (type == RADIO_FRAME_SWD_BURST);
+}
+
 static void reliable_queue(bridge_frame_type_t type,
                            const uint8_t *payload, uint8_t length)
 {
@@ -295,7 +302,11 @@ static void reliable_queue(bridge_frame_type_t type,
                                    s_pending_sequence, payload, length);
     s_retries = 0U;
     s_pending = true;
-    s_waiting_ack = false;
+    s_waiting_ack = !serial_bridge_swd_request_ack_enabled() &&
+                    swd_request_frame_type(type);
+    if (s_waiting_ack) {
+        s_deadline = board_millis() + BRIDGE_SWD_RESPONSE_TIMEOUT_MS;
+    }
 }
 
 static bool ack_send(uint32_t sequence,
@@ -353,6 +364,16 @@ static bool ack_send(uint32_t sequence,
     return true;
 }
 
+static bool swd_request_ack_allowed(bridge_frame_type_t type)
+{
+    if (serial_bridge_swd_request_ack_enabled()) {
+        return true;
+    }
+    return (type != BRIDGE_FRAME_SWD_COMMAND) &&
+           (type != RADIO_FRAME_SWD_BLOCK) &&
+           (type != RADIO_FRAME_SWD_BURST);
+}
+
 static bool radio_configure(bool start_new_session)
 {
     const device_config_t *config = device_config_get();
@@ -408,7 +429,9 @@ static bool frame_type_is_business(bridge_frame_type_t type)
            (type == BRIDGE_FRAME_SWD_COMMAND) ||
            (type == BRIDGE_FRAME_SWD_COMMAND_RESPONSE) ||
            (type == RADIO_FRAME_SWD_BLOCK) ||
-           (type == RADIO_FRAME_SWD_BLOCK_RESPONSE);
+           (type == RADIO_FRAME_SWD_BLOCK_RESPONSE) ||
+           (type == RADIO_FRAME_SWD_BURST) ||
+           (type == RADIO_FRAME_SWD_BURST_RESPONSE);
 }
 
 static bool frame_type_allows_retry_hop(bridge_frame_type_t type)
@@ -541,7 +564,8 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                 (bridge_frame_type_t)s_pending_frame[3];
             bool swd_pending_response =
                 (pending_type == BRIDGE_FRAME_SWD_COMMAND) ||
-                (pending_type == RADIO_FRAME_SWD_BLOCK);
+                (pending_type == RADIO_FRAME_SWD_BLOCK) ||
+                (pending_type == RADIO_FRAME_SWD_BURST);
 
             if (swd_pending_response) {
                 DAP_DIAG(request_ack());
@@ -611,6 +635,8 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
         (type != BRIDGE_FRAME_SWD_COMMAND_RESPONSE) &&
         (type != RADIO_FRAME_SWD_BLOCK) &&
         (type != RADIO_FRAME_SWD_BLOCK_RESPONSE) &&
+        (type != RADIO_FRAME_SWD_BURST) &&
+        (type != RADIO_FRAME_SWD_BURST_RESPONSE) &&
         (type != BRIDGE_FRAME_PROFILE_SWITCH) &&
         (type != BRIDGE_FRAME_PROFILE_CONFIRM) &&
         (type != BRIDGE_FRAME_SESSION_START) &&
@@ -633,7 +659,7 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
 
     duplicate = radio_protocol_key_equal(&key, &s_last_rx_key);
     if (!duplicate) {
-        if (type == BRIDGE_FRAME_DATA) {
+    if (type == BRIDGE_FRAME_DATA) {
             uint8_t data[BRIDGE_PAYLOAD_SIZE];
             uint8_t data_length;
 
@@ -668,6 +694,13 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
                                                            length)) {
                 return;
             }
+        } else if ((type == RADIO_FRAME_SWD_BURST) &&
+                   (config->device_mode ==
+                    DEVICE_MODE_WIRELESS_SLAVE)) {
+            if (!swd_bridge_service_wireless_burst_request(payload,
+                                                           length)) {
+                return;
+            }
         } else if ((type == BRIDGE_FRAME_SWD_COMMAND_RESPONSE) &&
                    (config->device_mode ==
                     DEVICE_MODE_WIRELESS_HOST)) {
@@ -691,6 +724,22 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
             DAP_DIAG(swd_response());
             if (s_pending &&
                 (s_pending_frame[3] == RADIO_FRAME_SWD_BLOCK)) {
+                s_pending = false;
+                s_waiting_ack = false;
+                s_retries = 0U;
+            }
+        } else if ((type == RADIO_FRAME_SWD_BURST_RESPONSE) &&
+                   (config->device_mode ==
+                    DEVICE_MODE_WIRELESS_HOST)) {
+            if (!swd_bridge_service_wireless_burst_response(payload,
+                                                            length)) {
+                DAP_DIAG(burst_parse_error());
+                return;
+            }
+            DAP_DIAG(burst_response_bytes(length));
+            DAP_DIAG(swd_response());
+            if (s_pending &&
+                (s_pending_frame[3] == RADIO_FRAME_SWD_BURST)) {
                 s_pending = false;
                 s_waiting_ack = false;
                 s_retries = 0U;
@@ -741,7 +790,8 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
         }
         activity_signal();
     } else if (((type == BRIDGE_FRAME_SWD_COMMAND) ||
-                (type == RADIO_FRAME_SWD_BLOCK)) &&
+                (type == RADIO_FRAME_SWD_BLOCK) ||
+                (type == RADIO_FRAME_SWD_BURST)) &&
                (config->device_mode == DEVICE_MODE_WIRELESS_SLAVE) &&
                !s_pending) {
         /* Re-send the cached result if the request ACK or reply was lost. */
@@ -766,7 +816,8 @@ static void frame_deliver(const uint8_t *frame, uint8_t frame_length,
             s_channel_after_ack != s_current_channel;
     }
     valid_rx_mark();
-    if (!serial_bridge_request_ack_required(type)) {
+    if (!serial_bridge_request_ack_required(type) ||
+        !swd_request_ack_allowed(type)) {
         return;
     }
     if (!ack_send(sequence, rx_status,
@@ -969,7 +1020,9 @@ static void swd_tunnel_process_pending(void)
         return;
     }
     if (swd_bridge_service_reply_take(response, &response_length)) {
-        reliable_queue(swd_bridge_service_reply_is_block()
+        reliable_queue(swd_bridge_service_reply_is_burst()
+                           ? RADIO_FRAME_SWD_BURST_RESPONSE
+                       : swd_bridge_service_reply_is_block()
                            ? RADIO_FRAME_SWD_BLOCK_RESPONSE
                            : BRIDGE_FRAME_SWD_COMMAND_RESPONSE,
                        response, response_length);
@@ -1387,6 +1440,7 @@ bool serial_bridge_swd_transfers(
     uint8_t count)
 {
     DAP_DIAG(swd_queued(count));
+    DAP_DIAG(single_swd());
     uint8_t payload[BRIDGE_PAYLOAD_SIZE];
     device_mode_t mode = device_config_get()->device_mode;
 
@@ -1419,6 +1473,36 @@ bool serial_bridge_swd_response_take(swd_tunnel_response_t *response)
     return swd_bridge_service_response_take(response);
 }
 
+bool serial_bridge_swd_burst(const swd_tunnel_burst_t *burst)
+{
+    uint8_t payload[BRIDGE_PAYLOAD_SIZE];
+    uint8_t length;
+
+    if ((burst == NULL) || s_pending ||
+        (device_config_get()->device_mode != DEVICE_MODE_WIRELESS_HOST)) {
+        return false;
+    }
+    length = swd_tunnel_burst_encode(burst, payload);
+    if ((length == 0U) ||
+        !swd_bridge_service_begin_burst(DEVICE_MODE_WIRELESS_HOST,
+                                        burst)) {
+        return false;
+    }
+    reliable_queue(RADIO_FRAME_SWD_BURST, payload, length);
+    if (!s_pending) {
+        (void)swd_bridge_service_cancel(burst->transaction_id);
+        return false;
+    }
+    DAP_DIAG(burst_queued(burst->count, length));
+    return true;
+}
+
+bool serial_bridge_swd_burst_response_take(
+    swd_tunnel_burst_response_t *response)
+{
+    return swd_bridge_service_burst_response_take(response);
+}
+
 void serial_bridge_swd_pump(void)
 {
     /* 只推进本地 SWD 引擎和它的响应路由。无线模式下响应来自射频，隧道空闲，
@@ -1435,7 +1519,8 @@ void serial_bridge_swd_cancel(uint8_t transaction_id)
     }
     if (s_pending &&
         ((s_pending_frame[3] == BRIDGE_FRAME_SWD_COMMAND) ||
-         (s_pending_frame[3] == RADIO_FRAME_SWD_BLOCK)) &&
+         (s_pending_frame[3] == RADIO_FRAME_SWD_BLOCK) ||
+         (s_pending_frame[3] == RADIO_FRAME_SWD_BURST)) &&
         (s_pending_frame[BRIDGE_HEADER_SIZE + 1U] ==
          transaction_id)) {
         s_pending = false;

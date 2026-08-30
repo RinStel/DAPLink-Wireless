@@ -82,7 +82,8 @@ typedef enum {
     DAP_STATE_COMMAND,
     DAP_STATE_PINS,
     DAP_STATE_SWD_SEQUENCE,
-    DAP_STATE_DELAY
+    DAP_STATE_DELAY,
+    DAP_STATE_BURST
 } dap_state_t;
 
 static uint8_t s_request[CMSIS_DAP_PACKET_SIZE];
@@ -116,12 +117,26 @@ static uint8_t s_parent_request_offset;
 static uint8_t s_parent_request_length;
 static uint8_t s_parent_response_offset;
 static bool s_parent_active;
+typedef struct {
+    bool transfer_block;
+    swd_tunnel_block_t block;
+} dap_burst_command_t;
+static dap_burst_command_t s_burst_commands[CMSIS_DAP_BURST_MAX_COMMANDS];
+static uint8_t s_burst_responses[CMSIS_DAP_BURST_MAX_COMMANDS]
+                                [CMSIS_DAP_PACKET_SIZE];
+static uint8_t s_burst_response_lengths[CMSIS_DAP_BURST_MAX_COMMANDS];
+static uint8_t s_burst_response_count;
+static uint8_t s_burst_response_read;
+static uint8_t s_burst_transaction;
+static uint8_t s_burst_command_count;
 
 static void response_finish(uint8_t length);
 static void response_invalid(void);
 static void response_error(uint8_t command);
 static bool parent_start_next(void);
 static void command_dispatch(void);
+static uint32_t decode_u32_le(const uint8_t *input);
+static void encode_u32_le(uint8_t *output, uint32_t value);
 
 
 static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
@@ -175,6 +190,214 @@ static bool command_length(const uint8_t *p, uint8_t avail, uint8_t *out)
     }
     if (n > avail || n > CMSIS_DAP_PACKET_SIZE) return false;
     *out = (uint8_t)n;
+    return true;
+}
+
+bool cmsis_dap_burst_eligible(const uint8_t *request, uint8_t length)
+{
+    uint8_t parsed_length;
+
+    if ((request == NULL) || (length == 0U) ||
+        ((request[0] != DAP_TRANSFER) &&
+         (request[0] != DAP_TRANSFER_BLOCK)) ||
+        !command_length(request, length, &parsed_length)) {
+        return false;
+    }
+    if (request[0] == DAP_TRANSFER) {
+        return (length >= 3U) && (request[2] != 0U);
+    }
+    return (length >= 5U) &&
+           (((uint16_t)request[2] |
+             ((uint16_t)request[3] << 8)) != 0U);
+}
+
+static bool burst_command_parse(const uint8_t *request, uint8_t length,
+                                dap_burst_command_t *command)
+{
+    uint16_t count;
+    uint8_t index;
+    uint8_t offset;
+    uint8_t parsed_length;
+
+    if ((command == NULL) ||
+        !cmsis_dap_burst_eligible(request, length)) {
+        return false;
+    }
+    if (!command_length(request, length, &parsed_length)) {
+        return false;
+    }
+    length = parsed_length;
+    memset(command, 0, sizeof(*command));
+    command->transfer_block = request[0] == DAP_TRANSFER_BLOCK;
+    if (command->transfer_block) {
+        uint8_t transfer_request = request[4] & 0x0FU;
+
+        count = (uint16_t)request[2] |
+                ((uint16_t)request[3] << 8);
+        if ((count > DAP_MAX_TRANSFERS) ||
+            ((request[4] & 0xF0U) != 0U) ||
+            (((transfer_request & DAP_TRANSFER_RNW) != 0U) &&
+             (count > 15U))) {
+            return false;
+        }
+        command->block.count = (uint8_t)count;
+        offset = 5U;
+        for (index = 0U; index < command->block.count; ++index) {
+            command->block.transfers[index].request = transfer_request;
+            if ((transfer_request & DAP_TRANSFER_RNW) == 0U) {
+                command->block.transfers[index].data =
+                    decode_u32_le(&request[offset]);
+                offset = (uint8_t)(offset + 4U);
+            }
+        }
+        return offset == length;
+    }
+
+    command->block.count = request[2];
+    if (command->block.count > DAP_MAX_TRANSFERS) {
+        return false;
+    }
+    offset = 3U;
+    for (index = 0U; index < command->block.count; ++index) {
+        uint8_t transfer_request = request[offset++];
+
+        if ((transfer_request & DAP_TRANSFER_UNSUPPORTED) != 0U ||
+            (((transfer_request & DAP_TRANSFER_MATCH_MASK) != 0U) &&
+             ((transfer_request & DAP_TRANSFER_RNW) != 0U)) ||
+            (((transfer_request & DAP_TRANSFER_MATCH_VALUE) != 0U) &&
+             ((transfer_request & DAP_TRANSFER_RNW) == 0U))) {
+            return false;
+        }
+        command->block.transfers[index].request = transfer_request & 0x3FU;
+        if (((transfer_request & DAP_TRANSFER_RNW) == 0U) ||
+            ((transfer_request & DAP_TRANSFER_MATCH_VALUE) != 0U)) {
+            command->block.transfers[index].data =
+                decode_u32_le(&request[offset]);
+            offset = (uint8_t)(offset + 4U);
+        }
+    }
+    return offset == length;
+}
+
+bool cmsis_dap_submit_burst(const uint8_t *const requests[],
+                            const uint8_t lengths[], uint8_t count)
+{
+    swd_tunnel_burst_t burst;
+    uint16_t request_total = 3U;
+    uint16_t response_total = 3U;
+    uint8_t index;
+
+    if ((requests == NULL) || (lengths == NULL) || !s_connected ||
+        (count < 2U) || (count > CMSIS_DAP_BURST_MAX_COMMANDS) ||
+        (s_state != DAP_STATE_IDLE) || s_response_ready ||
+        (s_burst_response_count != 0U)) {
+        DAP_DIAG(burst_reject_bridge());
+        return false;
+    }
+    memset(&burst, 0, sizeof(burst));
+    burst.count = count;
+    burst.transaction_id = (uint8_t)(s_transaction_id + 1U);
+    for (index = 0U; index < count; ++index) {
+        uint8_t request_length;
+        uint8_t response_length;
+
+        if (!burst_command_parse(requests[index], lengths[index],
+                                 &s_burst_commands[index])) {
+            DAP_DIAG(burst_reject_parse());
+            return false;
+        }
+        s_burst_commands[index].block.transaction_id =
+            (uint8_t)(burst.transaction_id + 1U + index);
+        burst.blocks[index] = s_burst_commands[index].block;
+        if (!swd_tunnel_block_encoded_lengths(
+                &burst.blocks[index], &request_length, &response_length)) {
+            DAP_DIAG(burst_reject_parse());
+            return false;
+        }
+        request_total = (uint16_t)(request_total + 1U + request_length);
+        response_total = (uint16_t)(response_total + 1U + response_length);
+        if ((request_total > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) ||
+            (response_total > SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
+            DAP_DIAG(burst_reject_capacity());
+            return false;
+        }
+    }
+    if (!serial_bridge_swd_burst(&burst)) {
+        DAP_DIAG(burst_reject_bridge());
+        return false;
+    }
+    s_transaction_id = burst.transaction_id;
+    s_burst_transaction = burst.transaction_id;
+    s_burst_command_count = count;
+    s_burst_response_count = 0U;
+    s_burst_response_read = 0U;
+    s_deadline = board_millis() + DAP_OPERATION_TIMEOUT_MS;
+    s_state = DAP_STATE_BURST;
+    return true;
+}
+
+static bool burst_responses_build(
+    const swd_tunnel_burst_response_t *burst_response)
+{
+    uint8_t command_index;
+
+    if ((burst_response == NULL) ||
+        (burst_response->transaction_id != s_burst_transaction) ||
+        (burst_response->count < 2U) ||
+        (burst_response->count > CMSIS_DAP_BURST_MAX_COMMANDS) ||
+        (burst_response->count != s_burst_command_count)) {
+        return false;
+    }
+    for (command_index = 0U; command_index < burst_response->count;
+         ++command_index) {
+        const dap_burst_command_t *command =
+            &s_burst_commands[command_index];
+        const swd_tunnel_block_response_t *block_response =
+            &burst_response->responses[command_index];
+        uint8_t *output = s_burst_responses[command_index];
+        uint8_t output_length = command->transfer_block ? 4U : 3U;
+        uint8_t transfer_index;
+        uint8_t read_index = 0U;
+
+        if ((block_response->transaction_id !=
+             command->block.transaction_id) ||
+            (block_response->completed > command->block.count)) {
+            return false;
+        }
+        output[0] = command->transfer_block
+                        ? DAP_TRANSFER_BLOCK
+                        : DAP_TRANSFER;
+        output[1] = block_response->completed;
+        if (command->transfer_block) {
+            output[2] = 0U;
+            output[3] = block_response->ack;
+        } else {
+            output[2] = block_response->ack;
+        }
+        for (transfer_index = 0U;
+             transfer_index < block_response->completed;
+             ++transfer_index) {
+            uint8_t transfer_request =
+                command->block.transfers[transfer_index].request;
+
+            if (((transfer_request & DAP_TRANSFER_RNW) != 0U) &&
+                ((transfer_request & DAP_TRANSFER_MATCH_VALUE) == 0U)) {
+                if ((read_index >= block_response->read_count) ||
+                    (output_length > CMSIS_DAP_PACKET_SIZE - 4U)) {
+                    return false;
+                }
+                encode_u32_le(&output[output_length],
+                              block_response->data[read_index++]);
+                output_length = (uint8_t)(output_length + 4U);
+            }
+        }
+        if (read_index != block_response->read_count) {
+            return false;
+        }
+        s_burst_response_lengths[command_index] = output_length;
+    }
+    s_burst_response_count = burst_response->count;
+    s_burst_response_read = 0U;
     return true;
 }
 
@@ -966,6 +1189,9 @@ void cmsis_dap_init(void)
     s_abort_requested = false;
     s_cancel_waiting = false;
     s_parent_active = false;
+    s_burst_response_count = 0U;
+    s_burst_response_read = 0U;
+    s_burst_command_count = 0U;
 }
 
 bool cmsis_dap_submit(const uint8_t *request, uint8_t length)
@@ -1009,6 +1235,69 @@ void cmsis_dap_abort(void)
 void cmsis_dap_process(void)
 {
     swd_tunnel_response_t result;
+
+    if (s_state == DAP_STATE_BURST) {
+        swd_tunnel_burst_response_t burst_response;
+
+        if (s_abort_requested) {
+            s_abort_requested = false;
+            serial_bridge_swd_cancel(s_burst_transaction);
+        }
+        serial_bridge_swd_pump();
+        if (serial_bridge_swd_burst_response_take(&burst_response)) {
+            if (!burst_responses_build(&burst_response)) {
+                uint8_t index;
+
+                for (index = 0U; index < s_burst_command_count;
+                     ++index) {
+                    uint8_t *output = s_burst_responses[index];
+                    output[0] = s_burst_commands[index].transfer_block
+                                    ? DAP_TRANSFER_BLOCK
+                                    : DAP_TRANSFER;
+                    output[1] = 0U;
+                    output[2] = s_burst_commands[index].transfer_block
+                                    ? 0U
+                                    : DAP_TRANSFER_ERROR;
+                    if (s_burst_commands[index].transfer_block) {
+                        output[3] = DAP_TRANSFER_ERROR;
+                        s_burst_response_lengths[index] = 4U;
+                    } else {
+                        s_burst_response_lengths[index] = 3U;
+                    }
+                }
+                s_burst_response_count = s_burst_command_count;
+                s_burst_response_read = 0U;
+            }
+            s_state = DAP_STATE_IDLE;
+            return;
+        }
+        if ((int32_t)(board_millis() - s_deadline) >= 0) {
+            uint8_t index;
+
+            serial_bridge_swd_cancel(s_burst_transaction);
+            for (index = 0U; index < s_burst_command_count;
+                 ++index) {
+                uint8_t *output = s_burst_responses[index];
+                output[0] = s_burst_commands[index].transfer_block
+                                ? DAP_TRANSFER_BLOCK
+                                : DAP_TRANSFER;
+                output[1] = 0U;
+                output[2] = s_burst_commands[index].transfer_block
+                                ? 0U
+                                : DAP_TRANSFER_ERROR;
+                if (s_burst_commands[index].transfer_block) {
+                    output[3] = DAP_TRANSFER_ERROR;
+                    s_burst_response_lengths[index] = 4U;
+                } else {
+                    s_burst_response_lengths[index] = 3U;
+                }
+            }
+            s_burst_response_count = index;
+            s_burst_response_read = 0U;
+            s_state = DAP_STATE_IDLE;
+        }
+        return;
+    }
 
     /* 这是命令核心的异步部分。USB 回调只提交或复制数据，桥接响应和超时
      * 处理全部在主循环完成。 */
@@ -1173,11 +1462,31 @@ void cmsis_dap_process(void)
 
 bool cmsis_dap_busy(void)
 {
-    return (s_state != DAP_STATE_IDLE) || s_response_ready;
+    return (s_state != DAP_STATE_IDLE) || s_response_ready ||
+           (s_burst_response_count != 0U);
+}
+
+uint8_t cmsis_dap_response_pending_count(void)
+{
+    if (s_response_ready) {
+        return 1U;
+    }
+    return s_burst_response_count;
 }
 
 bool cmsis_dap_response_take(uint8_t *response, uint8_t *length)
 {
+    if ((response != NULL) && (length != NULL) &&
+        (s_burst_response_count != 0U)) {
+        *length = s_burst_response_lengths[s_burst_response_read];
+        memcpy(response, s_burst_responses[s_burst_response_read], *length);
+        ++s_burst_response_read;
+        --s_burst_response_count;
+        if (s_burst_response_count == 0U) {
+            s_burst_response_read = 0U;
+        }
+        return true;
+    }
     if ((response == NULL) || (length == NULL) || !s_response_ready) {
         return false;
     }

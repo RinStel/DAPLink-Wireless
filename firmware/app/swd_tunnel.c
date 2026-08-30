@@ -467,6 +467,185 @@ bool swd_tunnel_decode_block_response(
     return true;
 }
 
+bool swd_tunnel_block_encoded_lengths(const swd_tunnel_block_t *block,
+                                      uint8_t *request_length,
+                                      uint8_t *worst_response_length)
+{
+    uint8_t index;
+    uint8_t request_data_count = 0U;
+    uint8_t response_data_count = 0U;
+    uint16_t request_size;
+    uint16_t response_size;
+
+    if ((block == NULL) || (request_length == NULL) ||
+        (worst_response_length == NULL) || (block->count == 0U) ||
+        (block->count > SWD_TUNNEL_MAX_BLOCK_TRANSFERS)) {
+        return false;
+    }
+    for (index = 0U; index < block->count; ++index) {
+        uint8_t request = block->transfers[index].request & 0x3FU;
+
+        if (!block_request_supported(request)) {
+            return false;
+        }
+        if (block_request_has_data(request)) {
+            ++request_data_count;
+        }
+        if (((request & SWD_TRANSFER_RNW) != 0U) &&
+            ((request & SWD_TRANSFER_MATCH_VALUE) == 0U)) {
+            ++response_data_count;
+        }
+    }
+    request_size = (uint16_t)(2U + block->count +
+                              (uint16_t)request_data_count * 4U);
+    response_size = (uint16_t)(4U +
+                               (uint16_t)response_data_count * 4U);
+    if ((request_size > SWD_TUNNEL_MAX_BLOCK_PAYLOAD) ||
+        (response_size > SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
+        return false;
+    }
+    *request_length = (uint8_t)request_size;
+    *worst_response_length = (uint8_t)response_size;
+    return true;
+}
+
+uint8_t swd_tunnel_burst_encode(const swd_tunnel_burst_t *burst,
+                                uint8_t *payload)
+{
+    uint8_t index;
+    uint16_t offset = 3U;
+
+    if ((burst == NULL) || (payload == NULL) || (burst->count < 2U) ||
+        (burst->count > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
+        return 0U;
+    }
+    payload[0] = SWD_TUNNEL_OP_BURST;
+    payload[1] = burst->transaction_id;
+    payload[2] = burst->count;
+    for (index = 0U; index < burst->count; ++index) {
+        uint8_t request_length;
+        uint8_t response_length;
+
+        if (!swd_tunnel_block_encoded_lengths(
+                &burst->blocks[index], &request_length, &response_length) ||
+            ((uint16_t)(offset + 1U + request_length) >
+             SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
+            return 0U;
+        }
+        payload[offset++] = request_length;
+        if (swd_tunnel_encode_block(
+                burst->blocks[index].transaction_id,
+                burst->blocks[index].transfers,
+                burst->blocks[index].count, &payload[offset]) !=
+            request_length) {
+            return 0U;
+        }
+        offset = (uint16_t)(offset + request_length);
+    }
+    return (uint8_t)offset;
+}
+
+bool swd_tunnel_burst_decode(const uint8_t *payload, uint8_t length,
+                             swd_tunnel_burst_t *burst)
+{
+    uint8_t index;
+    uint16_t offset = 3U;
+
+    if ((payload == NULL) || (burst == NULL) || (length < 3U) ||
+        (payload[0] != SWD_TUNNEL_OP_BURST) || (payload[2] < 2U) ||
+        (payload[2] > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
+        return false;
+    }
+    burst->transaction_id = payload[1];
+    burst->count = payload[2];
+    for (index = 0U; index < burst->count; ++index) {
+        uint8_t block_length;
+
+        if (offset >= length) {
+            return false;
+        }
+        block_length = payload[offset++];
+        if ((block_length == 0U) ||
+            ((uint16_t)(offset + block_length) > length) ||
+            !swd_tunnel_decode_block(&payload[offset], block_length,
+                                     &burst->blocks[index])) {
+            return false;
+        }
+        offset = (uint16_t)(offset + block_length);
+    }
+    return offset == length;
+}
+
+uint8_t swd_tunnel_burst_response_encode(
+    const swd_tunnel_burst_response_t *response, uint8_t *payload)
+{
+    uint8_t index;
+    uint16_t offset = 3U;
+
+    if ((response == NULL) || (payload == NULL) ||
+        (response->count < 2U) ||
+        (response->count > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
+        return 0U;
+    }
+    payload[0] = SWD_TUNNEL_OP_BURST;
+    payload[1] = response->transaction_id;
+    payload[2] = response->count;
+    for (index = 0U; index < response->count; ++index) {
+        const swd_tunnel_block_response_t *block =
+            &response->responses[index];
+        uint16_t block_length =
+            (uint16_t)(4U + (uint16_t)block->read_count * 4U);
+
+        if ((block_length > UINT8_MAX) ||
+            ((uint16_t)(offset + 1U + block_length) >
+             SWD_TUNNEL_MAX_BLOCK_PAYLOAD)) {
+            return 0U;
+        }
+        payload[offset++] = (uint8_t)block_length;
+        if (swd_tunnel_encode_block_response(
+                block->transaction_id, block->completed, block->ack,
+                block->data, block->read_count, &payload[offset]) !=
+            block_length) {
+            return 0U;
+        }
+        offset = (uint16_t)(offset + block_length);
+    }
+    return (uint8_t)offset;
+}
+
+bool swd_tunnel_burst_response_decode(
+    const uint8_t *payload, uint8_t length,
+    swd_tunnel_burst_response_t *response)
+{
+    uint8_t index;
+    uint16_t offset = 3U;
+
+    if ((payload == NULL) || (response == NULL) || (length < 3U) ||
+        (payload[0] != SWD_TUNNEL_OP_BURST) || (payload[2] < 2U) ||
+        (payload[2] > SWD_TUNNEL_BURST_MAX_BLOCKS)) {
+        return false;
+    }
+    response->transaction_id = payload[1];
+    response->count = payload[2];
+    for (index = 0U; index < response->count; ++index) {
+        uint8_t block_length;
+
+        if (offset >= length) {
+            return false;
+        }
+        block_length = payload[offset++];
+        if ((block_length == 0U) ||
+            ((uint16_t)(offset + block_length) > length) ||
+            !swd_tunnel_decode_block_response(
+                &payload[offset], block_length,
+                &response->responses[index])) {
+            return false;
+        }
+        offset = (uint16_t)(offset + block_length);
+    }
+    return offset == length;
+}
+
 static bool execute_immediate(const uint8_t *request,
                               uint8_t request_length,
                               uint8_t *response,

@@ -104,6 +104,16 @@ static bool request_full(void)
            s_transport.request_read;
 }
 
+#if CMSIS_DAP_DIAGNOSTICS_ENABLE
+static uint8_t request_depth(void)
+{
+    return s_transport.request_write >= s_transport.request_read
+               ? (uint8_t)(s_transport.request_write - s_transport.request_read)
+               : (uint8_t)(DAP_USB_RING_SIZE - s_transport.request_read +
+                           s_transport.request_write);
+}
+#endif
+
 static bool response_available(void)
 {
     return s_transport.response_read != s_transport.response_write;
@@ -226,6 +236,7 @@ static void dap_usb_data_out(usb_dev *udev, uint8_t ep_num)
     }
     s_transport.requests[s_transport.request_write].length = length;
     s_transport.request_write = ring_next(s_transport.request_write);
+    DAP_DIAG(request_ring_depth(request_depth()));
     receive_arm_if_space();
 }
 
@@ -249,12 +260,58 @@ void cmsis_dap_usb_process(void)
             }
             request->data[0] = DAP_EXECUTE_COMMANDS;
         }
+#if CMSIS_DAP_SWD_BURST_ENABLE
+        if (cmsis_dap_burst_eligible(request->data, request->length)) {
+            const uint8_t *requests[CMSIS_DAP_BURST_MAX_COMMANDS];
+            uint8_t lengths[CMSIS_DAP_BURST_MAX_COMMANDS];
+            uint8_t indices[CMSIS_DAP_BURST_MAX_COMMANDS];
+            uint8_t count = 0U;
+            uint8_t index = s_transport.request_read;
+            uint8_t attempt;
+            bool burst_submitted = false;
+
+            while ((index != s_transport.request_write) &&
+                   (count < CMSIS_DAP_BURST_MAX_COMMANDS)) {
+                dap_usb_packet_t *candidate =
+                    &s_transport.requests[index];
+
+                if (!cmsis_dap_burst_eligible(candidate->data,
+                                              candidate->length)) {
+                    break;
+                }
+                requests[count] = candidate->data;
+                lengths[count] = candidate->length;
+                indices[count] = index;
+                ++count;
+                index = ring_next(index);
+            }
+            for (attempt = count; attempt >= 2U; --attempt) {
+                if (cmsis_dap_submit_burst(requests, lengths, attempt)) {
+                    s_transport.request_read =
+                        ring_next(indices[attempt - 1U]);
+                    receive_arm_if_space();
+                    request = NULL;
+                    burst_submitted = true;
+                    break;
+                }
+            }
+            if (request == NULL) {
+                    goto request_submitted;
+            }
+            if ((count >= 2U) && !burst_submitted) {
+                DAP_DIAG(burst_fallback());
+            }
+        }
+#endif
         if (cmsis_dap_submit(request->data, request->length)) {
             s_transport.request_read =
                 ring_next(s_transport.request_read);
             receive_arm_if_space();
         }
     }
+#if CMSIS_DAP_SWD_BURST_ENABLE
+request_submitted:
+#endif
     cmsis_dap_process();
     if (!response_full()) {
         response = &s_transport.responses[s_transport.response_write];
