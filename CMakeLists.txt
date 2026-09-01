@@ -10,7 +10,7 @@ set(CMAKE_C_FLAGS_DEBUG "-Og -g3" CACHE STRING "Debug C flags" FORCE)
 set(CMAKE_C_FLAGS_RELEASE "-Os" CACHE STRING "Release C flags" FORCE)
 
 set(FIRMWARE_CPU_FLAGS -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
-set(FIRMWARE_COMMON_DEFINES GD32F30X_HD HXTAL_VALUE=8000000U USBD_EP0_MAX_SIZE=32U)
+set(FIRMWARE_COMMON_DEFINES GD32F30X_HD HXTAL_VALUE=8000000U)
 set(FIRMWARE_INCLUDE_DIRS
     firmware/app firmware/bsp firmware/update firmware/bootloader
     firmware/drivers/radio firmware/drivers/serial firmware/drivers/swd firmware/usb
@@ -40,9 +40,11 @@ set(FIRMWARE_VENDOR_USB
     vendor/GD32F30x_usbd_library/usbd/Source/usbd_lld_core.c
     vendor/GD32F30x_usbd_library/usbd/Source/usbd_lld_int.c)
 set(FIRMWARE_MSC
-    vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_core.c
-    vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_bbb.c
-    vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_scsi.c)
+    # 厂商 SCSI 层不编译：它把 512 字节的 media packet 整块交给 usbd_ep_send，
+    # 而驱动不按 PMA 槽夹取，会踩过 CDC/DAP 缓冲并越出 PMA。BOT 状态机仍用厂商
+    # usbd_msc_bbb.c（CBW 31 字节、CSW 13 字节，均在单个事务内），SCSI 命令与
+    # 分片由 firmware/usb/usb_msc_scsi.c 承担。
+    vendor/GD32F30x_usbd_library/class/device/msc/Source/usbd_msc_bbb.c)
 set(FIRMWARE_STARTUP
     firmware/toolchain/gcc/syscalls.c
     vendor/GD32_CMSIS/GD/GD32F30x/Source/system_gd32f30x.c
@@ -55,7 +57,8 @@ set(FIRMWARE_APPLICATION
     firmware/app/device_config_storage.c firmware/update/boot_confirm_once.c
     firmware/update/boot_mailbox.c firmware/update/boot_state.c firmware/update/firmware_image.c
     firmware/update/dfu_config_command.c firmware/usb/usb_config_disk.c
-    firmware/usb/usb_composite.c firmware/usb/usb_standard_request.c
+    firmware/usb/usb_composite.c firmware/usb/usb_msc_class.c
+    firmware/usb/usb_msc_scsi.c firmware/usb/usb_standard_request.c
     firmware/usb/usb_vendor_request.c firmware/usb/cdc_acm_transport.c
     firmware/usb/cmsis_dap_usb.c firmware/bsp/board.c firmware/drivers/radio/radio_hal.c
     firmware/drivers/radio/sx128x.c firmware/drivers/serial/target_uart.c

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- **修复 MSC 将 `USBD_EP0_MAX_SIZE` 与 `MSC_DATA_PACKET_SIZE` 互换导致的 PMA
+  溢出**（由未提交变更引入，复现“插入后近一分钟 DAP 不可访问”）。厂商
+  `usbd_ep_data_write()` 既不按 maxpacket 也不按端点 PMA 槽长夹取，且
+  `tx_count` 取请求字节数；而 MSC 槽只有 32 B 时，`scsi_process_read()`/
+  `scsi_write10()` 会按 `MSC_MEDIA_PACKET_SIZE`（512 B）一次交整个扇区，从
+  0x00C8 连写 512 B 踩过 CDC 通知/数据、`s_packet_in`（DAP 回复）并越出
+  0x200 的 PMA 末尾，OUT 方向同样越界至 0x2A8。与实测完全吻合：CDC 仍可打开
+  （SET_LINE_CODING 走 EP0）、仅 MI_00(MSC) 与 MI_03(WinUSB) 两个子设备进
+  `LIBUSB_ERROR_NOT_SUPPORTED`、全程不掉线不跳问题码。
+  现在 SCSI 数据平面改由 `firmware/usb/usb_msc_scsi.c` 实现（停止编译厂商同名
+  文件，保留未改动的 `usbd_msc_bbb.c`）：扇区暂存在 512 B RAM 缓冲
+  `bbb_data`，每次只交不超 `MSC_DATA_PACKET_SIZE` 的片，接收侧只信
+  `xfer_count`；同时恢复 HEAD 的 PMA 几何（EP0 32 B / MSC 64 B）。厂商 SCSI 层
+  传给 `mem_read`/`mem_write` 的第 3 参是“块数”，而 `usb_config_disk.c` 的
+  `disk_read`/`disk_write` 按“字节地址”语义实现（内部再乘块大小），新实现按
+  字节地址传参与后者一致。`usbd_conf.h` 新增 3 条 `_Static_assert`：扇区必须是
+  端点事务长度的整数倍、MSC 槽必须容得下 31 字节 CBW 与 13 字节 CSW；新测
+  `usb-msc-scsi` 在桩函数里逐事务核长度与拼接内容。实机复测：插入后 **5.06 s**
+  DAP 已可用（修复前同方法测得故障窗口 60.6 s，窗口内 1208 次 `attach` 均失败于
+  `LIBUSB_ERROR_NOT_SUPPORTED`，且 CDC 可打开）。
+
 ## 1.0.53 - 2026-08-30
 
 - 新增 CDC 回显吞吐基准（RADIO_FRAME_LOOPBACK 帧 + vendor 0x82 开关 +

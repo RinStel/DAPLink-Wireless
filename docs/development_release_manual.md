@@ -30,6 +30,65 @@ USB D+ 上拉因此延迟到无线初始化完成后才建立。当前启动顺�
 `VID_28E9&PID_1290` 出现的时间，并分别排除 USB-C CC、电缆、D+/D−、R19 上拉、48 MHz
 USB 时钟和供电问题。
 
+### USB PMA 预算与单次事务上限（2026-09-01）
+
+症状：刚连电脑后近一分钟 CMSIS-DAP 不可访问，之后自动恢复；重新烧录或复位同
+样复现。已定位原因是 **MSC 的 PMA 槽只有 32 字节，而一次扇区事务交出了 512 字节**。
+
+硬不变量：`usbd_ep_send()`/`usbd_ep_recev()` 单次提交的字节数 **必须不大于该端点的
+PMA 槽长**。厂商 `usbd_lld_core.c` 的 `usbd_ep_data_write()` 按半字直写 PMA，既不按
+maxpacket 也不按槽长夹取，且 `tx_count` 取请求字节数。一旦超限，写入会踩过相邻
+端点的缓冲并越出 PMA 末尾（0x200）进入外设寄存器窗口。
+
+GD32F303 USBFS 只有 **512 字节 PMA**，五个端点方向对共九个缓冲，预算表
+（地址由 `usbd_conf.h` 从 `EP_COUNT × 8` 起按长度逐个推导，这里只列长度，因为
+具体地址随端点方案变化）：
+
+| 用途 | 长度 |
+|---|---|
+| BDT | `EP_COUNT × 8`（48，`EP_COUNT = 6`） |
+| EP0 RX / TX | 32 + 32 |
+| MSC OUT / IN | 64 + 64 |
+| CDC 通知 IN | 8 |
+| CDC 数据 OUT / IN | 64 + 64 |
+| DAP v2 OUT / IN | 64 + 64 |
+
+合计 504 字节，**只剩 8 字节余量**。这就是为什么不能“给 EP0 多要 64 字节”：
+唯一能撑出 56 字节的做法就是把 MSC 降到 32，而那就直接产生本事故。
+
+MSC 为何不能低于 64：BOT 的 CBW 是 31 字节、CSW 是 13 字节，且数据阶段以 64 字节
+分片；曾因“给 EP0 腾 64 字节”把 MSC 降为 32，而 `MSC_MEDIA_PACKET_SIZE` 仍是 512，
+一个扇区读写就直接溢出。**EP0 与 MSC 在争同一块 512 字节**，改任何一端前必须重
+算全表。注意已有的两道门禁各管一段：`usbd_conf.h` 用**推导式地址**定义每个槽
+（`BULK_TX_ADDR = EP0_RX_ADDR + USBD_EP0_MAX_SIZE` 等），因此相邻槽在构造上不可能
+重叠，`#if USB_PMA_END_ADDR > USB_PMA_SIZE` 只能拦住“总额超 512”。本次事故不在
+这两道门禁的覆盖范围内：**厂商 SCSI 层假定 `MSC_MEDIA_PACKET_SIZE` 就是端点 PMA 槽**，
+而两者之间没有任何绑定。现在由 `usbd_conf.h` 的三条 `_Static_assert`（扇区是事务
+长度的整数倍、槽容得下 CBW/CSW）与 `usb_msc_scsi.c` 的分片实现共同保证。
+
+区分于其它 60 秒假说的现场特征（用 `tools/usb_dap_watch.py` 采集）：复合设备已枚
+举、EP0 应答正常、**CDC 能打开**（`SET_LINE_CODING` 走 EP0，不受溢出影响），但 MI_00(MSC)
+与 MI_03(WinUSB) 两个子设备同时 `libusb_open` 失败于 `LIBUSB_ERROR_NOT_SUPPORTED`，
+全程不掉线不跳问题码。Windows 对复合设备的功能是**串行安装**的，所以 MSC 卡住就
+会把 DAP 的驱动启动排在后面——这就是“DAP 不可访问”而不是“磁盘不可访问”的原因。
+
+### 改 USB 几何前必做的两步验证
+
+1. **先确认跑的是哪张镜像**：改 `USBD_EP0_MAX_SIZE`/端点 maxpacket 会在主机可见的
+   描述符上留指纹。用 `pyusb` 读活动配置：`bMaxPacketSize0` 与端点 `wMaxPacketSize`
+   必须等于新几何；不相等就是没烧对、没重新 configure、或 A/B 双槽从另一槽启动了。
+   同理，`build/gcc/*/<目标>.map` 里查 `*.c.obj` 能确认新文件真进了链接。
+2. **区分“设备聋了”与“主机没启动功能”**：除 `attach`/EP0/DAP 三个探针外，再加一个
+   “打开 CDC 串口”探针（它会迫使 `usbser` 经 EP0 下发 `SET_LINE_CODING`）。“CDC 开得
+   但 DAP 开不”指向子设备驱动栈未启动，而不是固件不应答。
+
+本轮被实测证伪、已排除的其它 60 秒假说（不要重新引入）：DeviceSetupManager 联网
+检索元数据超时（禁用 `DsmSvc` 仍约 60s）；`usbstor` 请求超时（改
+`HKLM\SYSTEM\CurrentControlSet\Services\Disk\TimeOutValue` 不影响窗口长度）；挂载时的
+磁盘元数据写入风暴（它能解释整机断开，不是本窗口的根因）。工具自身的探针 bug
+一度被记成“设备打不开”，现在 `probe_attach()` 拿不到对象时返回未知而非失败，并由
+`tests/usb_dap_watch_test.py` 钉住。
+
 ## 主机测试与软件门禁
 
 全部主机测试：

@@ -328,6 +328,36 @@ $tests = [ordered]@{
         includes = @("firmware/usb")
         sources = @("tests/usb_disk_geometry_test.c")
     }
+    "usb-msc-class" = @{
+        label = "USB MSC class adapter"
+        defines = @("GD32F30X_HD")
+        includes = @("firmware/bsp", "firmware/usb")
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include",
+            "vendor/GD32F30x_usbd_library/device/Include",
+            "vendor/GD32F30x_usbd_library/usbd/Include",
+            "vendor/GD32F30x_usbd_library/class/device/msc/Include"
+        )
+        sources = @("tests/usb_msc_class_test.c",
+                    "firmware/usb/usb_msc_class.c")
+    }
+    "usb-msc-scsi" = @{
+        label = "USB MSC SCSI slicing"
+        defines = @("GD32F30X_HD")
+        includes = @("firmware/bsp", "firmware/usb")
+        system_includes = @(
+            "vendor/GD32_CMSIS",
+            "vendor/GD32_CMSIS/GD/GD32F30x/Include",
+            "vendor/GD32F30x_standard_peripheral/Include",
+            "vendor/GD32F30x_usbd_library/device/Include",
+            "vendor/GD32F30x_usbd_library/usbd/Include",
+            "vendor/GD32F30x_usbd_library/class/device/msc/Include"
+        )
+        sources = @("tests/usb_msc_scsi_test.c",
+                    "firmware/usb/usb_msc_scsi.c")
+    }
 }
 
 $compilerCommand = Get-Command $CompilerName -ErrorAction SilentlyContinue
